@@ -1,4 +1,5 @@
 import tkinter as tk
+from tkinter import ttk
 from tkinter import filedialog
 import tkinter.messagebox
 import os
@@ -17,10 +18,10 @@ from matplotlib.backends.backend_tkagg import (
 
 @dataclass
 class Browser:
-    file_dir: str
-    base_dir: str
-    file_name: str
-    rec_name: str
+    data_file: str
+    stimulus_file: str
+    reference_image_file: str
+    roi_file: str
 
 
 class MainApplication(tk.Frame):
@@ -55,10 +56,10 @@ class MainApplication(tk.Frame):
 
         # Create a dataclass to store directories for browsing files
         self.browser = Browser
-        self.browser.file_dir = ''
-        self.browser.base_dir = ''
-        self.browser.file_name = ''
-        self.browser.rec_name = ''
+        self.browser.data_file = ''
+        self.browser.stimulus_file= ''
+        self.browser.reference_image_file = ''
+        self.browser.roi_file = ''
 
         # Add the file menu
         self.add_file_menu()
@@ -192,7 +193,7 @@ class MainApplication(tk.Frame):
         # Add Menu
         menu_bar = tk.Menu(self.master)
         file_menu = tk.Menu(menu_bar, tearoff=0)
-        file_menu.add_command(label="Open Data File", command=self._open_file)
+        file_menu.add_command(label="Open Data File", command=self._import_data)
         file_menu.add_command(label="Import Stimulus", command=self._open_stimulus_file)
         file_menu.add_command(label="Calcium Impulse Response Function", command=self._cirf_creater)
         file_menu.add_separator()
@@ -386,28 +387,45 @@ class MainApplication(tk.Frame):
         self.update_stimulus_trace()
 
     def update_stimulus_trace(self):
+        self.axs.set_visible(True)
         self.stimulus_plot.set_xdata(self.stimulus['Time'])
         self.stimulus_plot.set_ydata(self.stimulus['Volt'])
         self.canvas.draw()
 
-    def _browse_file(self):
-        file_dir = filedialog.askopenfilename(filetypes=[('Recording Files', '.txt')])
-        base_dir = os.path.split(file_dir)[0]
+    def update_recording_trace(self):
+        self.axs.set_visible(True)
+        self.data_plot.set_ydata(self.data_df[self.data_rois[self.data_id]])
+        self.data_plot.set_xdata(self.data_time)
+        self.canvas.draw()
+
+    def update_reference_image(self):
+        self.axs_ref.set_visible(True)
+
+    def _browse_file(self, file_type, file_extension):
+        # file_extension must be: [('Recording Files', '.txt')]
+        file_dir = filedialog.askopenfilename(filetypes=file_extension)
         file_name = os.path.split(file_dir)[1]
-        rec_name = os.path.split(base_dir)[1]
-
-        # Store into browser dataclass
-        self.browser.file_dir = file_dir
-        self.browser.base_dir = base_dir
-        self.browser.file_name = file_name
-        self.browser.rec_name = rec_name
-
+        if file_type == 'data':
+            self.browser.data_file = file_dir
+            # Update Label
+            self.data_file_name_label.config(text=file_name)
+        elif file_type == 'stimulus':
+            self.browser.stimulus_file = file_dir
+            # Update Label
+            self.stimulus_file_name_label.config(text=file_name)
+        elif file_type == 'reference':
+            self.browser.reference_image_file = file_dir
+            # Update Label
+            self.reference_file_name_label.config(text=file_name)
+        elif file_type == 'rois':
+            self.browser.roi_file = file_dir
+            # Update Label
+            self.rois_file_name_label.config(text=file_name)
+        else:
+            print('ERROR: Invalid File Type')
+            return "break"
         # Bring Stimulus Import Window back to top
         self.import_window.lift()
-
-        # Update Label
-        self.file_name_label.config(text=self.browser.file_name)
-        print(self.browser.file_name)
 
     def _next(self, event):
         self.listbox.selection_clear(self.data_id)
@@ -554,66 +572,304 @@ class MainApplication(tk.Frame):
         self.canvas.draw()
         self.canvas_ref.draw()
 
-    def open_data_file(self):
-        f_file_name = filedialog.askopenfilename(filetypes=[('Recording Files', '.txt')])
-        f_rec_dir = os.path.split(f_file_name)[0]
-        # f_rec_name = os.path.split(f_rec_dir)[1]
-        #
-        # f_file_name, f_rec_dir, _ = self.browse_file()
+    def _switch_define_frame_rate(self):
+        if self.import_stimulus_variable.get() == 0:  # this means no stimulus file is available
+            print(self.import_stimulus_variable.get())
+            self.frame_rate_input.grid(row=5, column=0)
+            # self.frame_rate_popup = tk.Toplevel(self.import_window)
+            # self.frame_rate_window = tk.Entry(self.frame_rate_popup)
+            # self.frame_rate_window.grid(row=5, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
+        if self.import_stimulus_variable.get() == 1:
+            print(self.import_stimulus_variable.get())
+            self.frame_rate_input.grid_forget()
 
-        # Get Stimulus File
-        file_list = os.listdir(f_rec_dir)
-        stimulation_file = [s for s in file_list if 'stimulation' in s]
-        if stimulation_file:
-            stimulus_file_dir = f'{f_rec_dir}/{stimulation_file[0]}'
-            self.stimulus_found = True
-            self.stimulus = self.import_stimulation_file(stimulus_file_dir)
+    def _import_data(self):
+        # Pop up a new window
+        self.import_window = tk.Toplevel(self.master)
+        self.import_window.title('Import...')
+        self.import_window.geometry("600x800")
+        # import_data_window.attributes('-topmost', True)
+
+        # GLOBAL LAYOUT SETTINGS
+        header_label_size = 12
+        separator_symbol = '-'
+        separator_count = 40
+
+        # IMPORT DATA SETTINGS +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        self.import_data_window = tk.Frame(self.import_window)
+        self.import_data_window.grid(row=0, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
+
+        # Label
+        data_window_label = tk.Label(self.import_data_window, text='IMPORT DATA FILE', font=('Arial', header_label_size))
+        data_window_label.grid(row=0, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
+        # CheckButton if you want to import data?
+        button_w = 32
+        button_h = 16
+        self.on_image = tk.PhotoImage(width=button_w, height=button_h)
+        self.off_image = tk.PhotoImage(width=button_w, height=button_h)
+        # (x_start, y_start, x_end, y_end), x start is left, y start is top
+        self.on_image.put(("green",), to=(0, 0, button_w//2, button_h))
+        self.off_image.put(("red",), to=(button_w//2, 0, button_w, button_h))
+
+        self.import_data_variable = tk.IntVar(value=1)
+        self.import_data_checkbutton = tk.Checkbutton(
+            self.import_data_window, image=self.off_image, selectimage=self.on_image, indicatoron=False,
+            onvalue=1, offvalue=0, variable=self.import_data_variable)
+
+        self.import_data_checkbutton.grid(row=0, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
+
+        # Add Open File Button
+        # Set data type:
+        data_file_extension = [('Recording Files', ['.txt', '.csv'])]
+        select_data_button = tk.Button(
+            self.import_data_window, text="Open File ...", command=lambda: self._browse_file('data', data_file_extension))
+        select_data_button.grid(row=2, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
+
+        # Add Label for Data File Name
+        self.data_file_name_label = tk.Label(self.import_data_window, text="No File selected")
+        self.data_file_name_label.grid(row=2, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
+
+        # Delimiter Settings
+        delimiter_options = ['Comma', 'Tab', 'Semicolon', 'Space', 'Colon']
+        data_delimiter_label = tk.Label(self.import_data_window, text="Delimiter: ")
+        data_delimiter_label.grid(row=3, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
+        self.delimiter_data_variable = tk.StringVar(self.import_data_window)
+        self.delimiter_data_variable.set(delimiter_options[0])  # default value
+        delimiter_dropdown = tk.OptionMenu(self.import_data_window, self.delimiter_data_variable, *delimiter_options)
+        delimiter_dropdown.grid(row=3, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
+        delimiter_dropdown.config(width=10, font=('Arial', 8))
+
+        # Add Header Options
+        self.data_has_header = tk.IntVar(value=0)
+        data_has_header_button = tk.Checkbutton(
+            self.import_data_window, text="File has Column Headers: ",
+            variable=self.data_has_header, onvalue=0, offvalue=1)
+        data_has_header_button.grid(row=4, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
+
+        # Frame Rate (Switches on when there is no stimulus file)
+        self.frame_rate_input = tk.Entry(self.import_data_window)
+
+        # Add Separator
+        separator = tk.Label(self.import_window, text=[separator_symbol] * separator_count)
+        separator.grid(row=1, column=0, padx=5, pady=10, sticky=(tk.N, tk.W))
+
+        # IMPORT STIMULUS SETTINGS +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        self.import_stimulus_window = tk.Frame(self.import_window)
+        self.import_stimulus_window.grid(row=2, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
+        # Label
+        stimulus_window_label = tk.Label(self.import_stimulus_window, text='IMPORT STIMULUS FILE', font=('Arial', header_label_size))
+        stimulus_window_label.grid(row=0, column=0, padx=5, pady=10, sticky=(tk.N, tk.W))
+
+        # CheckButton if you want to import stimulus?
+        self.import_stimulus_variable = tk.IntVar(value=1)
+        self.import_stimulus_checkbutton = tk.Checkbutton(
+            self.import_stimulus_window, image=self.off_image, selectimage=self.on_image, indicatoron=False,
+            onvalue=1, offvalue=0, variable=self.import_stimulus_variable, command=self._switch_define_frame_rate)
+        self.import_stimulus_checkbutton.grid(row=0, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
+
+        # Add Open File Button
+        stimulus_file_extension = [('Stimulus Files', ['.txt', '.csv'])]
+        select_stimulus_button = tk.Button(
+            self.import_stimulus_window, text="Open File ...", command=lambda: self._browse_file('stimulus', stimulus_file_extension))
+        select_stimulus_button.grid(row=2, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
+
+        # Add Label for Data File Name
+        self.stimulus_file_name_label = tk.Label(self.import_stimulus_window, text="No File selected")
+        self.stimulus_file_name_label.grid(row=2, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
+
+        # Delimiter Settings
+        stimulus_delimiter_label = tk.Label(self.import_stimulus_window, text="Delimiter: ")
+        stimulus_delimiter_label.grid(row=3, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
+        self.delimiter_stimulus_variable = tk.StringVar(self.import_stimulus_window)
+        self.delimiter_stimulus_variable.set(delimiter_options[0])  # default value
+        delimiter_dropdown = tk.OptionMenu(self.import_stimulus_window, self.delimiter_stimulus_variable, *delimiter_options)
+        delimiter_dropdown.grid(row=3, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
+        delimiter_dropdown.config(width=10, font=('Arial', 8))
+
+        # Add Header Options
+        self.stimulus_has_header = tk.IntVar(value=0)
+        stimulus_has_header_button = tk.Checkbutton(
+            self.import_stimulus_window, text="File has Column Headers: ",
+            variable=self.stimulus_has_header, onvalue=0, offvalue=1)
+        stimulus_has_header_button.grid(row=4, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
+
+        # Which column contains data?
+        self.cols_label = tk.Label(self.import_stimulus_window, text="Column Data: ")
+        self.cols_label.grid(row=5, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
+        self.cols = tk.Entry(self.import_stimulus_window)
+        self.cols.grid(row=5, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
+
+        self.cols_time_label = tk.Label(self.import_stimulus_window, text="Column Time Axis (none: 0): ")
+        self.cols_time_label.grid(row=6, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
+        self.cols_time = tk.Entry(self.import_stimulus_window)
+        self.cols_time.grid(row=6, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
+
+        # Add Separator
+        separator = tk.Label(self.import_window, text=[separator_symbol] * separator_count)
+        separator.grid(row=3, column=0, padx=5, pady=10, sticky=(tk.N, tk.W))
+
+        # IMPORT REFERENCE IMAGE +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        self.import_reference_window = tk.Frame(self.import_window)
+        self.import_reference_window.grid(row=4, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
+        # Label
+        reference_window_label = tk.Label(self.import_reference_window, text='IMPORT REFERENCE IMAGE',
+                                         font=('Arial', header_label_size))
+        reference_window_label.grid(row=0, column=0, padx=5, pady=10, sticky=(tk.N, tk.W))
+
+        # CheckButton if you want to import stimulus?
+        self.import_reference_variable = tk.IntVar(value=1)
+        self.import_reference_checkbutton = tk.Checkbutton(
+            self.import_reference_window, image=self.off_image, selectimage=self.on_image, indicatoron=False,
+            onvalue=1, offvalue=0, variable=self.import_reference_variable)
+        self.import_reference_checkbutton.grid(row=0, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
+
+        # Add Open File Button
+        reference_file_extension = [('Reference Image', ['.jpg', '.jpeg', '.png', '.tif', '.tiff'])]
+        select_reference_button = tk.Button(
+            self.import_reference_window, text="Open File ...", command=lambda: self._browse_file('reference', reference_file_extension))
+        select_reference_button.grid(row=2, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
+
+        # Add Label for Data File Name
+        self.reference_file_name_label = tk.Label(self.import_reference_window, text="No File selected")
+        self.reference_file_name_label.grid(row=2, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
+
+        # Add Separator
+        separator = tk.Label(self.import_window, text=[separator_symbol] * separator_count)
+        separator.grid(row=5, column=0, padx=5, pady=10, sticky=(tk.N, tk.W))
+
+        # IMPORT ROIs ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        self.import_rois_window = tk.Frame(self.import_window)
+        self.import_rois_window.grid(row=6, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
+        # Label
+        rois_window_label = tk.Label(self.import_rois_window, text='IMPORT ROIS',
+                                          font=('Arial', header_label_size))
+        rois_window_label.grid(row=0, column=0, padx=5, pady=10, sticky=(tk.N, tk.W))
+
+        # CheckButton if you want to import stimulus?
+        self.import_rois_variable = tk.IntVar(value=1)
+        self.import_rois_checkbutton = tk.Checkbutton(
+            self.import_rois_window, image=self.off_image, selectimage=self.on_image, indicatoron=False,
+            onvalue=1, offvalue=0, variable=self.import_rois_variable)
+        self.import_rois_checkbutton.grid(row=0, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
+
+        # Add Open File Button
+        rois_file_extension = [('ROIs', ['.zip'])]
+        select_rois_button = tk.Button(
+            self.import_rois_window, text="Open File ...",
+            command=lambda: self._browse_file('rois', rois_file_extension))
+        select_rois_button.grid(row=2, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
+
+        # Add Label for Data File Name
+        self.rois_file_name_label = tk.Label(self.import_rois_window, text="No File selected")
+        self.rois_file_name_label.grid(row=2, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
+
+        # Add Separator
+        separator = tk.Label(self.import_window, text=[separator_symbol] * separator_count)
+        separator.grid(row=7, column=0, padx=5, pady=10, sticky=(tk.N, tk.W))
+
+        # import_data_button = tk.Button(self.import_data_window, text='Done', command=self._open_data_file)
+        # import_data_button.grid(row=7, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
+
+    def _collect_import_data(self):
+        # All inputs are strings!
+        # Data Info
+        if self.import_data_variable == 1:
+            rec_delimiter = self.convert_to_delimiter(self.delimiter_data_variable.get())
+            rec_header_button_state = self.data_has_header.get()
+            if rec_header_button_state == 0:
+                rec_header = 0
+            else:
+                rec_header = None
+            # Now Import Data File
+            self.data_raw = pd.read_csv(self.browser.data_file, delimiter=rec_delimiter, header=rec_header)
+            # Get ROIs
+            self.data_rois = self.data_raw.keys()
+            self.data_id = 0
+            # Convert to delta f over f
+            self.data_df = self.convert_raw_to_df_f(self.data_raw)
+            # Compute z-scores
+            self.data_z = self.compute_z_score(self.data_df)
+            # Estimate Data Frame Rate, with not specified
+            if self.stimulus_found:
+                self.data_fr = self.estimate_sampling_rate(data=self.data_raw, f_stimulation=self.stimulus,
+                                                           print_msg=True)
+            else:
+                print('PLEASE SPECIFY SAMPLING RATE ...')
+                self.data_fr = 2.034514712575680
+            # Compute data time axis
+            self.data_time = self.convert_samples_to_time(sig=self.data_raw, fr=self.data_fr)
+            # Now Update The Figure
+            print(self.data_raw)
+            self.update_recording_trace()
+
+        # Stimulus Info
+        if self.import_stimulus_variable == 1:
+            delimiter = self.convert_to_delimiter(self.delimiter_variable.get())
+            data_column_number = self.cols.get()
+            time_column_number = self.cols_time.get()
+            header_button_state = self.has_header.get()
+            if header_button_state == 0:
+                header = 0
+            else:
+                header = None
+
+            # Check if entries are correct
+            try:
+                data_column_number = int(data_column_number) - 1
+                time_column_number = int(time_column_number) - 1
+                if time_column_number == data_column_number:
+                    tk.messagebox.showerror(title='Wrong Input',
+                                            message='Time and Data Column cannot be the same!')
+                    self.import_window.lift()
+                    return None
+
+                stimulus_file = pd.read_csv(self.browser.stimulus_file, delimiter=delimiter, header=header)
+                if data_column_number > stimulus_file.shape[1]:
+                    tk.messagebox.showerror(title='Wrong Input',
+                                            message='Data Column number exceeds size of selected file!')
+                    self.import_window.lift()
+                    return None
+                if time_column_number >= 0:
+                    if time_column_number > stimulus_file.shape[1]:
+                        tk.messagebox.showerror(title='Wrong Input',
+                                                message='Time Column number exceeds size of selected file!')
+                        self.import_window.lift()
+                        return None
+                    else:
+                        self.stimulus['Time'] = stimulus_file.iloc[:, time_column_number]
+                self.stimulus['Volt'] = stimulus_file.iloc[:, data_column_number]
+            except ValueError:
+                tk.messagebox.showerror(title='Wrong Input', message='Only Integer Number are allowed for Column numbers!')
+                # Bring Stimulus Import Window back to top
+                self.import_window.lift()
+                return None
+            # Now Update The Figure
+            print(self.stimulus)
+            self.update_stimulus_trace()
+
+        # Reference Image and ROIs Info
+        if self.import_reference_variable == 1:
+            self.ref_img = plt.imread(self.browser.reference_image_file)
+            self.rois_in_ref = read_roi_zip(self.browser.roi_file)
+            self._compute_ref_images()
+
+
+    def _open_data_file(self):
+        header_button_state = self.has_header.get()
+        if header_button_state == 0:
+            header = 0
         else:
-            print('COULD NOT FIND STIMULUS FILE!')
-            self.stimulus = pd.DataFrame()
-            self.stimulus_found = False
-
-        # Get Reference Image
-        ref_file = [s for s in file_list if 'ref' in s]
-        if ref_file:
-            self.ref_img_found = True
-            ref_img_file_dir = f'{f_rec_dir}/{ref_file[0]}'
-            self.ref_img = plt.imread(ref_img_file_dir)
-        else:
-            print('COULD NOT FIND REFERENCE IMAGE FILE!')
-            self.ref_img_found = False
-            self.ref_img = None
-
-        # Get Image ROIs
-        roi_file = [s for s in file_list if 'Roi' in s]
-        if roi_file:
-            self.rois_in_ref = read_roi_zip(f'{f_rec_dir}/{roi_file[0]}')
-        else:
-            print('COULD NOT FIND IMAGEJ ROIS!')
-            self.rois_in_ref = None
-        # Now compute Reference Images with Rois drawn on top
-        self._compute_ref_images()
-
-        # Get Recording Data
-        self.data_raw = self.import_f_raw(file_dir=f_file_name)
-        self.new_data_loaded = True
-
-        # Get ROIs
-        self.data_rois = self.data_raw.keys()
-        self.data_id = 0
+            header = None
+        delimiter = self.convert_to_delimiter(self.delimiter_data_variable.get())
+        # Import data file from HDD
+        self.data_raw = pd.read_csv(self.browser.file_dir, delimiter=delimiter, header=header)
 
         # Convert to delta f over f
         self.data_df = self.convert_raw_to_df_f(self.data_raw)
         # Compute z-scores
         self.data_z = self.compute_z_score(self.data_df)
-        # Estimate Data Frame Rate, with not specified
-        if self.stimulus_found:
-            self.data_fr = self.estimate_sampling_rate(data=self.data_raw, f_stimulation=self.stimulus, print_msg=True)
-        else:
-            print('PLEASE SPECIFY SAMPLING RATE ...')
-            self.data_fr = 2.034514712575680
-        # Compute data time axis
-        self.data_time = self.convert_samples_to_time(sig=self.data_raw, fr=self.data_fr)
+
+        # Time Axis
 
         # Fill List with rois
         # First clear listbox
