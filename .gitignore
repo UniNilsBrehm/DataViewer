@@ -1,0 +1,15 @@
+# ignore ALL .log files
+*.log
+*.idea
+
+# ignore ALL files in ANY directory named temp
+temp 
+.idea
+__pycache__
+ExampleData
+ExampleData/
+test
+test/
+temp/ 
+.idea/
+__pycache__/
