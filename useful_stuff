@@ -1,0 +1,61 @@
+## ***************************************************************************
+## * INTERACTIVE KEYMAPS                                                     *
+## ***************************************************************************
+## Event keys to interact with figures/plots via keyboard.
+## See https://matplotlib.org/stable/users/explain/interactive.html for more
+## details on interactive navigation.  Customize these settings according to
+## your needs. Leave the field(s) empty if you don't need a key-map. (i.e.,
+## fullscreen : '')
+#keymap.fullscreen: f, ctrl+f   # toggling
+#keymap.home: h, r, home        # home or reset mnemonic
+#keymap.back: left, c, backspace, MouseButton.BACK  # forward / backward keys
+#keymap.forward: right, v, MouseButton.FORWARD      # for quick navigation
+#keymap.pan: p                  # pan mnemonic
+#keymap.zoom: o                 # zoom mnemonic
+#keymap.save: s, ctrl+s         # saving current figure
+#keymap.help: f1                # display help about active tools
+#keymap.quit: ctrl+w, cmd+w, q  # close the current figure
+#keymap.quit_all:               # close all figures
+#keymap.grid: g                 # switching on/off major grids in current axes
+#keymap.grid_minor: G           # switching on/off minor grids in current axes
+#keymap.yscale: l               # toggle scaling of y-axes ('log'/'linear')
+#keymap.xscale: k, L            # toggle scaling of x-axes ('log'/'linear')
+#keymap.copy: ctrl+c, cmd+c     # copy figure to clipboard
+
+
+# List information about toolbar buttons
+# print(self.toolbar.toolitems)
+# List key bindings for matplotlib plots
+# plt.rcParams['keymap.save']
+# plt.rcParams['keymap.save'].remove('s')
+
+
+# toolbar = NavigationToolbar2Tk(self._canvas, frame)
+#
+# To list information about buttons
+#
+# print(toolbar.toolitems)
+#
+# To remove Pan button - it is 4th button
+#
+# toolbar.children['!button4'].pack_forget()
+#
+# To assign new function to existing button - ie. Home
+#
+# def my_function():
+#     print("Pressed Home")
+#
+# toolbar.children['!button1'].config(command=my_function)
+#
+# To add new button
+#
+# button = tkinter.Button(master=toolbar, text="Quit", command=_quit)
+# #button.pack()
+# button.pack(side="left")
+#
+# The same way you could add other tkinter widgets - Label, Entry, etc.
+#
+# EDIT: as ImportanceOfBeingErnest mentioned in comment it can be done more elegant way.
+#
+# NavigationToolbar2Tk.toolitems = [t for t in NavigationToolbar2Tk.toolitems if
+#              t[0] not in ('Pan',)]

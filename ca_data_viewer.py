@@ -15,7 +15,8 @@ import matplotlib.pyplot as plt
 # from matplotlib.backend_bases import key_press_handler
 from matplotlib.backends.backend_tkagg import (
     FigureCanvasTkAgg, NavigationToolbar2Tk)
-from matplotlib.backend_bases import NavigationToolbar2
+# from matplotlib.backend_bases import NavigationToolbar2
+import matplotlib
 
 # plt.rcParams['toolbar'] = 'toolmanager'
 
@@ -105,6 +106,9 @@ class MainApplication(tk.Frame):
         self.master.bind('q', self._quit)
         self.listbox.bind('<Down>', self.do_nothing)
         self.listbox.bind('<Up>', self.do_nothing)
+        # Remove left and right arrow shortcut for the matplotlib navigation tool bar
+        plt.rcParams['keymap.forward'].remove('right')
+        plt.rcParams['keymap.back'].remove('left')
 
         # Prepare Figures
         # Ref Image with ROIs
@@ -137,20 +141,22 @@ class MainApplication(tk.Frame):
         # Catch Mouse Clicks on Figure Canvas
         self.canvas.mpl_connect('button_press_event', self.canvas_on_mouse_click)
         self.canvas_ref.mpl_connect("button_press_event", self.select_roi_with_mouse)
-        self.canvas_ref.mpl_connect("key_press_event", self.detect_key)
+        # self.canvas_ref.mpl_connect("key_press_event", self.detect_key)
 
         # # Add Toolbars
         # self.toolbar = NavigationToolbar2Tk(self.canvas, self.frame_toolbar)
         # self.toolbar.pack(side=tk.TOP)
         # self.toolbar_ref = NavigationToolbar2Tk(self.canvas_ref, self.frame_toolbar_ref)
         # self.toolbar_ref.pack(side=tk.TOP)
-        self.toolbar = CustomNavigationToolbar2Tk(self.canvas, self.frame_toolbar)
-        self.toolbar.pack(side=tk.TOP)
-        self.toolbar_ref = CustomNavigationToolbar2Tk(self.canvas_ref, self.frame_toolbar_ref)
-        self.toolbar_ref.pack(side=tk.TOP)
+        # self.toolbar = CustomNavigationToolbar2Tk(self.canvas, self.frame_toolbar)
+        # self.toolbar.pack(side=tk.TOP)
+        # self.toolbar_ref = CustomNavigationToolbar2Tk(self.canvas_ref, self.frame_toolbar_ref)
+        # self.toolbar_ref.pack(side=tk.TOP)
 
         # List information about toolbar buttons
         # print(self.toolbar.toolitems)
+        # List key bindings for matplotlib plots
+        # plt.rcParams['keymap.save']
 
         # Remove some tools from the toolbar
         # self.toolbar.children['!button2'].pack_forget()
@@ -165,6 +171,17 @@ class MainApplication(tk.Frame):
 
         self.configure_gui()
 
+    def add_file_menu(self):
+        # Add Menu
+        menu_bar = tk.Menu(self.master)
+        file_menu = tk.Menu(menu_bar, tearoff=0)
+        file_menu.add_command(label="Import Files", command=self._import_data)
+        file_menu.add_command(label="Calcium Impulse Response Function", command=self._cirf_creater)
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self._exit_app)
+        menu_bar.add_cascade(label="File", menu=file_menu)
+        self.master.config(menu=menu_bar)
+
     def detect_key(self, event):
         if event.key == 'left':
             self.print_something(event)
@@ -172,25 +189,26 @@ class MainApplication(tk.Frame):
             self.print_something(event)
 
     def select_roi_with_mouse(self, event):
-        click_x = event.xdata
-        click_y = event.ydata
-        error = []
-        for k in self.roi_pos:
-            x_diff = (k[0] - click_x)**2
-            y_diff = (k[1] - click_y)**2
-            error.append(np.sqrt(x_diff + y_diff))
-        pixel_th = 10
-        if np.min(error) > pixel_th:
-            # There is no ROI located close enough to the click
-            return "break"
-        idx_min = np.where(error == np.min(error))[0][0]
-        _data_id = idx_min
-        # Update Listbox
-        self.listbox.selection_clear(self.data_id)
-        self.listbox.activate(_data_id)
-        self.listbox.select_set(self.listbox.index(tk.ACTIVE))
-        self.listbox.event_generate("<<ListboxSelect>>")
-        self.listbox.see(_data_id)
+        if self.new_data_loaded:
+            click_x = event.xdata
+            click_y = event.ydata
+            error = []
+            for k in self.roi_pos:
+                x_diff = (k[0] - click_x)**2
+                y_diff = (k[1] - click_y)**2
+                error.append(np.sqrt(x_diff + y_diff))
+            pixel_th = 10
+            if np.min(error) > pixel_th:
+                # There is no ROI located close enough to the click
+                return "break"
+            idx_min = np.where(error == np.min(error))[0][0]
+            _data_id = idx_min
+            # Update Listbox
+            self.listbox.selection_clear(self.data_id)
+            self.listbox.activate(_data_id)
+            self.listbox.select_set(self.listbox.index(tk.ACTIVE))
+            self.listbox.event_generate("<<ListboxSelect>>")
+            self.listbox.see(_data_id)
 
     def canvas_on_mouse_click(self, event):
         if event.dblclick and not self.new_data_loaded:
@@ -210,18 +228,6 @@ class MainApplication(tk.Frame):
 
     def enter_frame_traces(self):
         print('ENTERED!')
-
-    def add_file_menu(self):
-        # Add Menu
-        menu_bar = tk.Menu(self.master)
-        file_menu = tk.Menu(menu_bar, tearoff=0)
-        file_menu.add_command(label="Open Data File", command=self._import_data)
-        file_menu.add_command(label="Import Stimulus", command=self._open_stimulus_file)
-        file_menu.add_command(label="Calcium Impulse Response Function", command=self._cirf_creater)
-        file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self._exit_app)
-        menu_bar.add_cascade(label="File", menu=file_menu)
-        self.master.config(menu=menu_bar)
 
     def _cirf_creater(self):
         # Pop up a new window
@@ -314,107 +320,6 @@ class MainApplication(tk.Frame):
                 r_color=(0, 0, 255), alp=0.5, thickness=1)
             )
 
-    def _open_stimulus_file(self):
-        # Pop up a new window
-        self.import_window = tk.Toplevel(self.master)
-        self.import_window.title('Import Stimulus File')
-        self.import_window.geometry("600x600")
-        # import_window.attributes('-topmost', True)
-
-        # Add Text Label (Description)
-        self.description_text = tk.Label(self.import_window, text="Please select a stimulus file and adjust the settings:")
-        self.description_text.grid(row=0, column=0, columnspan=2, padx=5, pady=5, sticky=(tk.N, tk.W))
-
-        # Add Open File Button
-        open_button = tk.Button(self.import_window, text="Open File ...", command=self._browse_file)
-        open_button.grid(row=1, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
-
-        # Add Label for File Name
-        self.file_name_label = tk.Label(self.import_window, text="No File selected")
-        self.file_name_label.grid(row=1, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
-
-        # Delimiter Settings
-        self.delimiter_label = tk.Label(self.import_window, text="Delimiter: ")
-        self.delimiter_label.grid(row=2, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
-        delimiter_options = ['Comma', 'Tab', 'Semicolon', 'Space', 'Colon']
-        self.delimiter_variable = tk.StringVar(self.import_window)
-        self.delimiter_variable.set(delimiter_options[0])  # default value
-        self.delimiter_dropdown = tk.OptionMenu(self.import_window, self.delimiter_variable, *delimiter_options)
-        self.delimiter_dropdown.grid(row=2, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
-        self.delimiter_dropdown.config(width=10, font=('Arial', 8))
-
-        # Which column contains data?
-        self.cols_label = tk.Label(self.import_window, text="Column Data: ")
-        self.cols_label.grid(row=3, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
-        self.cols = tk.Entry(self.import_window)
-        self.cols.grid(row=3, column=1)
-
-        self.cols_time_label = tk.Label(self.import_window, text="Column Time Axis (none: 0): ")
-        self.cols_time_label.grid(row=4, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
-        self.cols_time = tk.Entry(self.import_window)
-        self.cols_time.grid(row=4, column=1)
-
-        # Add Header Options
-        self.has_header = tk.IntVar()
-        self.has_header_button = tk.Checkbutton(self.import_window, text="File has Column Headers: ",
-                                                variable=self.has_header, onvalue=0, offvalue=1)
-        self.has_header_button.grid(row=5, column=0)
-
-        self.import_button = tk.Button(self.import_window, text='Done', command=self._collect_info)
-        self.import_button.grid(row=7, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
-
-    def _collect_info(self):
-        # All inputs are strings!
-        delimiter = self.convert_to_delimiter(self.delimiter_variable.get())
-        data_column_number = self.cols.get()
-        time_column_number = self.cols_time.get()
-        header_button_state = self.has_header.get()
-        if header_button_state == 0:
-            header = 0
-        else:
-            header = None
-
-        # Check if entries are correct
-        try:
-            data_column_number = int(data_column_number) - 1
-            time_column_number = int(time_column_number) - 1
-            if time_column_number == data_column_number:
-                tk.messagebox.showerror(title='Wrong Input',
-                                        message='Time and Data Column cannot be the same!')
-                self.import_window.lift()
-                return None
-
-            stimulus_file = pd.read_csv(self.browser.file_dir, delimiter=delimiter, header=header)
-            if data_column_number > stimulus_file.shape[1]:
-                tk.messagebox.showerror(title='Wrong Input',
-                                        message='Data Column number exceeds size of selected file!')
-                self.import_window.lift()
-                return None
-            if time_column_number >= 0:
-                if time_column_number > stimulus_file.shape[1]:
-                    tk.messagebox.showerror(title='Wrong Input',
-                                            message='Time Column number exceeds size of selected file!')
-                    self.import_window.lift()
-                    return None
-                else:
-                    self.stimulus['Time'] = stimulus_file.iloc[:, time_column_number]
-            self.stimulus['Volt'] = stimulus_file.iloc[:, data_column_number]
-        except ValueError:
-            tk.messagebox.showerror(title='Wrong Input', message='Only Integer Number are allowed for Column numbers!')
-            # Bring Stimulus Import Window back to top
-            self.import_window.lift()
-            return None
-        # Now Update The Figure
-        print(self.stimulus)
-        self.update_stimulus_trace()
-
-    def update_stimulus_trace(self):
-        self.axs.set_visible(True)
-        self.stimulus_plot.set_xdata(self.stimulus['Time'])
-        self.stimulus_plot.set_ydata(self.stimulus['Volt'])
-        self.canvas.draw()
-        print('Stimulus updated')
-
     def initialize_stimulus_plot(self):
         self.axs.set_visible(True)
         self.stimulus_plot, = self.axs.plot(self.stimulus['Time'], self.stimulus['Volt'], 'b')
@@ -426,16 +331,6 @@ class MainApplication(tk.Frame):
         self.data_plot, = self.axs.plot(self.data_time, self.data_df[self.data_rois[self.data_id]], 'k')
         self.canvas.draw()
         print('Recording drawn to Canvas')
-
-    def update_recording_trace(self):
-        self.axs.set_visible(True)
-        self.data_plot.set_ydata(self.data_df[self.data_rois[self.data_id]])
-        self.data_plot.set_xdata(self.data_time)
-        self.canvas.draw()
-        print('Recording updated')
-
-    def update_reference_image(self):
-        self.axs_ref.set_visible(True)
 
     def _browse_file(self, file_type, file_extension):
         # file_extension must be: [('Recording Files', '.txt')]
@@ -464,152 +359,49 @@ class MainApplication(tk.Frame):
         self.import_window.lift()
 
     def _next(self, event):
-        self.listbox.selection_clear(self.data_id)
-        self.data_id_prev = self.data_id
-        _data_id = self.data_id + 1
-        _data_id = _data_id % self.data_raw.shape[1]
+        if self.new_data_loaded:
+            self.listbox.selection_clear(self.data_id)
+            self.data_id_prev = self.data_id
+            _data_id = self.data_id + 1
+            _data_id = _data_id % self.data_raw.shape[1]
 
-        # Update Listbox
-        self.listbox.activate(_data_id)
-        self.listbox.select_set(self.listbox.index(tk.ACTIVE))
-        self.listbox.event_generate("<<ListboxSelect>>")
-        self.listbox.see(_data_id)
+            # Update Listbox
+            self.listbox.activate(_data_id)
+            self.listbox.select_set(self.listbox.index(tk.ACTIVE))
+            self.listbox.event_generate("<<ListboxSelect>>")
+            self.listbox.see(_data_id)
 
     def _previous(self, event):
-        # print(event)
-        self.listbox.selection_clear(self.data_id)
-        _data_id = self.data_id - 1
-        _data_id = _data_id % self.data_raw.shape[1]
+        if self.new_data_loaded:
+            # print(event)
+            self.listbox.selection_clear(self.data_id)
+            _data_id = self.data_id - 1
+            _data_id = _data_id % self.data_raw.shape[1]
 
-        # Update Listbox
-        self.listbox.activate(_data_id)
-        self.listbox.select_set(self.listbox.index(tk.ACTIVE))
-        self.listbox.event_generate("<<ListboxSelect>>")
-        self.listbox.see(_data_id)
+            # Update Listbox
+            self.listbox.activate(_data_id)
+            self.listbox.select_set(self.listbox.index(tk.ACTIVE))
+            self.listbox.event_generate("<<ListboxSelect>>")
+            self.listbox.see(_data_id)
 
     def _turn_page(self):
-        # Update Recording Plot Data
-        self.data_plot.set_ydata(self.data_df[self.data_rois[self.data_id]])
+        if self.new_data_loaded:
+            # Update Recording Plot Data
+            self.data_plot.set_ydata(self.data_df[self.data_rois[self.data_id]])
 
-        # Update Ref Image
-        if self.import_rois_variable.get() == 1:
-            self.ref_img_obj.set_data(self.roi_images[self.data_id])
-            # Update Ref Image Label
-            self.ref_img_text[self.data_id_prev].set_color((1, 1, 1))
-            self.ref_img_text[self.data_id].set_color((1, 0, 0))
-            self.canvas_ref.draw()
-        self.canvas.draw()
-
-    def _update_plotting_data(self):
-        self.data_plot.set_ydata(self.data_df[self.data_rois[self.data_id]])
+            # Update Ref Image
+            if self.import_rois_variable.get() == 1:
+                self.ref_img_obj.set_data(self.roi_images[self.data_id])
+                # Update Ref Image Label
+                self.ref_img_text[self.data_id_prev].set_color((1, 1, 1))
+                self.ref_img_text[self.data_id].set_color((1, 0, 0))
+                self.canvas_ref.draw()
+            self.canvas.draw()
 
     def list_items_selected(self, event):
         self.data_id_prev = self.data_id
         self.data_id, = self.listbox.curselection()
         self._turn_page()
-
-    def _open_file(self):
-        self.import_data_text.set_visible(False)
-        f_file_name = filedialog.askopenfilename(filetypes=[('Recording Files', '.txt')])
-        f_rec_dir = os.path.split(f_file_name)[0]
-        # f_rec_name = os.path.split(f_rec_dir)[1]
-        #
-        # f_file_name, f_rec_dir, _ = self.browse_file()
-
-        # Get Stimulus File
-        file_list = os.listdir(f_rec_dir)
-        stimulation_file = [s for s in file_list if 'stimulation' in s]
-        if stimulation_file:
-            stimulus_file_dir = f'{f_rec_dir}/{stimulation_file[0]}'
-            self.stimulus_found = True
-            self.stimulus = self.import_stimulation_file(stimulus_file_dir)
-        else:
-            print('COULD NOT FIND STIMULUS FILE!')
-            self.stimulus = pd.DataFrame()
-            self.stimulus_found = False
-
-        # Get Reference Image
-        ref_file = [s for s in file_list if 'ref' in s]
-        if ref_file:
-            self.ref_img_found = True
-            ref_img_file_dir = f'{f_rec_dir}/{ref_file[0]}'
-            self.ref_img = plt.imread(ref_img_file_dir)
-        else:
-            print('COULD NOT FIND REFERENCE IMAGE FILE!')
-            self.ref_img_found = False
-            self.ref_img = None
-
-        # Get Image ROIs
-        roi_file = [s for s in file_list if 'Roi' in s]
-        if roi_file:
-            self.rois_in_ref = read_roi_zip(f'{f_rec_dir}/{roi_file[0]}')
-        else:
-            print('COULD NOT FIND IMAGEJ ROIS!')
-            self.rois_in_ref = None
-        # Now compute Reference Images with Rois drawn on top
-        self._compute_ref_images()
-
-        # Get Recording Data
-        self.data_raw = self.import_f_raw(file_dir=f_file_name)
-        self.new_data_loaded = True
-
-        # Get ROIs
-        self.data_rois = self.data_raw.keys()
-        self.data_id = 0
-
-        # Convert to delta f over f
-        self.data_df = self.convert_raw_to_df_f(self.data_raw)
-        # Compute z-scores
-        self.data_z = self.compute_z_score(self.data_df)
-        # Estimate Data Frame Rate, with not specified
-        if self.stimulus_found:
-            self.data_fr = self.estimate_sampling_rate(data=self.data_raw, f_stimulation=self.stimulus, print_msg=True)
-        else:
-            print('PLEASE SPECIFY SAMPLING RATE ...')
-            self.data_fr = 2.034514712575680
-        # Compute data time axis
-        self.data_time = self.convert_samples_to_time(sig=self.data_raw, fr=self.data_fr)
-
-        # Fill List with rois
-        # First clear listbox
-        self.listbox.delete(0, tk.END)
-        rois_numbers = np.linspace(1, len(self.data_rois.to_list()), len(self.data_rois.to_list()), dtype='int')
-        rois_numbers = np.char.mod('%d', rois_numbers)
-        self.listbox.insert("end", *rois_numbers)
-        self.listbox.bind('<<ListboxSelect>>', self.list_items_selected)
-
-        # INITIALIZE DATA AND REFERENCE FIGURES
-        # If this is the first time that any data was loaded, create the plot
-        if self.first_start_up:
-            self.first_start_up = False
-            # Plot Ref Image
-            if self.ref_img_found:
-                self.ref_img_obj = self.axs_ref.imshow(self.roi_images[self.data_id])
-                self.ref_img_text = []
-                for i, v in enumerate(self.roi_pos):
-                    if i == self.data_id:
-                        color = (1, 0, 0)
-                    else:
-                        color = (1, 1, 1)
-                    self.ref_img_text.append(self.axs_ref.text(
-                        v[0], v[1], f'{i + 1}', fontsize=10, color=color,
-                        horizontalalignment='center', verticalalignment='center'
-                    ))
-
-                # self.ref_img_text = self.axs_ref.text(
-                #     0, 0, f'{self.data_id + 1}', fontsize=12, color=(1, 0, 0),
-                #     horizontalalignment='center', verticalalignment='center'
-                # )
-                # self.ref_img_text.set_position(self.roi_pos[self.data_id])
-                self.axs_ref.axis('off')
-            # Plot Data
-            if not self.stimulus.empty:
-                self.stimulus_plot, = self.axs.plot(self.stimulus['Time'], self.stimulus['Volt'], 'b')
-            self.data_plot, = self.axs.plot(self.data_time, self.data_df[self.data_rois[self.data_id]], 'k')
-        self.axs.set_visible(True)
-        self.axs_ref.set_visible(True)
-        self.canvas.draw()
-        self.canvas_ref.draw()
 
     def _switch_stimulus_import(self):
         switch_var = self.import_stimulus_variable.get()
@@ -963,7 +755,8 @@ class MainApplication(tk.Frame):
         if reference_selected:
             rois_selected = self.import_rois_variable.get()
         else:
-            rois_selected = False
+            self.import_rois_variable.set(value=0)
+            rois_selected = self.import_rois_variable.get()
         self.window_dummy = self.import_window
 
         # ==============================================================================================================
@@ -1058,7 +851,13 @@ class MainApplication(tk.Frame):
                 self.data_fr = self.estimate_sampling_rate(
                      data=self.data_raw, f_stimulation=self.stimulus, print_msg=True)
             else:
-                self.data_fr = self.frame_rate_input.get()
+                # Check frame rate entry
+                try:
+                    self.data_fr = float(self.frame_rate_input.get())
+                except ValueError:
+                    self.pop_up_error('ERROR', 'Data Sampling Rate must be a Float')
+                    return "break"
+
             # Compute Time Axis for Recording
             data_dummy = self.data_raw[self.data_rois[self.data_id]]
             self.data_time = np.linspace(0, len(data_dummy) / self.data_fr, len(data_dummy))
@@ -1140,16 +939,23 @@ class MainApplication(tk.Frame):
                 self.axs_ref.set_visible(True)
                 self.canvas_ref.draw()
 
+        # Add Navigation Toolbars
+        self.toolbar_ref = CustomNavigationToolbar2Tk(self.canvas_ref, self.frame_toolbar_ref)
+        self.toolbar_ref.pack(side=tk.TOP)
+        self.toolbar = CustomNavigationToolbar2Tk(self.canvas, self.frame_toolbar)
+        self.toolbar.pack(side=tk.TOP)
+
+        # Exit Import Window
         self.new_data_loaded = True
         self.import_window.destroy()
 
     def _quit(self, event):
         self.master.quit()
-        self.master.destroy()
+        # self.master.destroy()
 
     def _exit_app(self):
         self.master.quit()
-        self.master.destroy()
+        # self.master.destroy()
 
     def draw_rois_zipped(self, img, rois_dic, active_roi, r_color, alp, thickness=1):
         """
@@ -1443,54 +1249,10 @@ class VerticalNavigationToolbar2Tk(NavigationToolbar2Tk):
         # hex color strings e.g.'#BEEFED' and named colors e.g. 'gainsboro' both work
 
 
-class CustomNavigationToolbar2(NavigationToolbar2):
-    def __init__(self, canvas):
-        super().__init__(canvas)
-
-    def back(self, *args):
-        """
-        Move back up the view lim stack.
-        For convenience of being directly connected as a GUI callback, which
-        often get passed additional parameters, this method accepts arbitrary
-        parameters, but does not use them.
-        """
-        pass
-        # self._nav_stack.back()
-        # self.set_history_buttons()
-        # self._update_view()
-
-    def forward(self, *args):
-        """
-        Move forward in the view lim stack.
-        For convenience of being directly connected as a GUI callback, which
-        often get passed additional parameters, this method accepts arbitrary
-        parameters, but does not use them.
-        """
-        pass
-        # self._nav_stack.forward()
-        # self.set_history_buttons()
-        # self._update_view()
-
-
 # https://github.com/matplotlib/matplotlib/blob/00ec4ec6321d85af8519e268d67807746207f7d2/lib/matplotlib/backends/_backend_tk.py#L369
 class CustomNavigationToolbar2Tk(NavigationToolbar2Tk):
     def __init__(self, canvas, window):
-        super().__init__(canvas, window, pack_toolbar=False)
-
-    def set_history_buttons(self):
-        pass
-        # state_map = {True: tk.NORMAL, False: tk.DISABLED}
-        # can_back = self._nav_stack._pos > 0
-        # can_forward = self._nav_stack._pos < len(self._nav_stack._elements) - 1
-        #
-        # if "Back" in self._buttons:
-        #     self._buttons['Back']['state'] = state_map[can_back]
-        #
-        # if "Forward" in self._buttons:
-        #     self._buttons['Forward']['state'] = state_map[can_forward]
-
-    def zoom(self, *args):
-        super().zoom(*args)
+        super().__init__(canvas, window, pack_toolbar=True)
 
     def draw_rubberband(self, event, x0, y0, x1, y1):
         self.remove_rubberband()
