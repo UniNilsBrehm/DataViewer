@@ -7,6 +7,10 @@ import csv
 import cv2
 import pandas as pd
 import numpy as np
+from joblib import Parallel, delayed
+import multiprocessing
+from sklearn.linear_model import LinearRegression
+from scipy.interpolate import interp1d
 from dataclasses import dataclass
 from IPython import embed
 from read_roi import read_roi_zip
@@ -19,6 +23,16 @@ from matplotlib.backends.backend_tkagg import (
 import matplotlib
 
 # plt.rcParams['toolbar'] = 'toolmanager'
+
+
+def interpolate_data_outside(data, data_time, new_time):
+    f = interp1d(data_time, data, kind='linear', bounds_error=False, fill_value=0)
+    new_data = f(new_time)
+    return new_data
+
+
+def unwrap_self():
+    return MainApplication.interpolate_data()
 
 
 @dataclass
@@ -58,6 +72,13 @@ class MainApplication(tk.Frame):
 
         # Create boolean to state if new data was loaded
         self.new_data_loaded = False
+
+        # Calcium Impulse Response Function Default Settings
+        self.cirf_tau_1 = 1
+        self.cirf_tau_2 = 2
+        self.cirf_tau_2_max = 10
+        self.cirf_a = 1
+        self.dt = 0.0001
 
         # Create a dataclass to store directories for browsing files
         self.browser = Browser
@@ -175,6 +196,7 @@ class MainApplication(tk.Frame):
         # Add Menu
         menu_bar = tk.Menu(self.master)
         file_menu = tk.Menu(menu_bar, tearoff=0)
+        file_menu.add_command(label="DEMO", command=self._quick_start_with_data)
         file_menu.add_command(label="Import Files", command=self._import_data)
         file_menu.add_command(label="Calcium Impulse Response Function", command=self._cirf_creater)
         file_menu.add_separator()
@@ -229,20 +251,162 @@ class MainApplication(tk.Frame):
     def enter_frame_traces(self):
         print('ENTERED!')
 
+    
+    def interpolate_data(self, data):
+        data_time = self.data_time
+        new_time = self.stimulus_ds['Time']
+        f = interp1d(data_time, data, kind='linear', bounds_error=False, fill_value=0)
+        new_data = f(new_time)
+        return new_data
+
+    @staticmethod
+    def apply_linear_model(xx, yy, norm_reg=True):
+        # Normalize data to [0, 1]
+        if norm_reg:
+            f_y = yy / np.max(yy)
+        else:
+            f_y = yy
+
+        # Check dimensions of reg
+        if xx.shape[0] == 0:
+            print('ERROR: Wrong x input')
+            return 0, 0, 0
+        if yy.shape[0] == 0:
+            print('ERROR: Wrong y input')
+            return 0, 0, 0
+
+        if len(xx.shape) == 1:
+            reg_xx = xx.reshape(-1, 1)
+        elif len(xx.shape) == 2:
+            reg_xx = xx
+        else:
+            print('ERROR: Wrong x input')
+            return 0, 0, 0
+
+        # Linear Regression
+        l_model = LinearRegression().fit(reg_xx, f_y)
+        # Slope (y = a * x + c)
+        a = l_model.coef_[0]
+        # R**2 of model
+        f_r_squared = l_model.score(reg_xx, f_y)
+        # Score
+        f_score = a * f_r_squared
+        return f_score, f_r_squared, a
+
+    @staticmethod
+    def find_stimulus_time(volt_threshold, f_stimulation, mode):
+        # Find stimulus time points
+        if mode == 'below':
+            threshold_crossings = np.diff(f_stimulation < volt_threshold, prepend=False)
+        else:
+            # mode = 'above'
+            threshold_crossings = np.diff(f_stimulation > volt_threshold, prepend=False)
+
+        # Get Upward Crossings
+        f_upward = np.argwhere(threshold_crossings)[::2, 0]  # Upward crossings
+
+        # Get Downward Crossings
+        f_downward = np.argwhere(threshold_crossings)[1::2, 0]  # Downward crossings
+
+        return f_downward, f_upward
+
+    def _compute_stimulus_regression(self):
+        a = self._linear_regression_scoring()
+
+    def _linear_regression_scoring(self):
+        # Settings
+        intensity_threshold = 4
+
+        # Down-Sample stimulus
+        ds_factor = 10
+        stimulus_ds = pd.DataFrame()
+        stimulus_ds['Time'] = self.stimulus['Time'].to_numpy()[::ds_factor]
+        stimulus_ds['Volt'] = self.stimulus['Volt'].to_numpy()[::ds_factor]
+        cirf_data_ds = self.cirf_data[::ds_factor]
+        self.stimulus_ds = stimulus_ds
+        # Find stimulus onsets and offsets
+        # stimulus_diff = np.diff(self.stimulus['Volt'], append=0)
+        offsets, onsets = self.find_stimulus_time(
+            volt_threshold=intensity_threshold, f_stimulation=stimulus_ds['Volt'], mode='above')
+
+        # Convert stimulus samples into time
+        stimulus_onset_times = stimulus_ds['Time'].iloc[onsets]
+        stimulus_offset_times = stimulus_ds['Time'].iloc[offsets]
+
+        # Interpolation Ca Recording Trace (Up-Sampling) for Linear Model
+        # Do this in parallel
+        self.dummy = []
+        for _, idx in enumerate(self.data_z):
+            self.dummy.append(self.data_z[idx].to_numpy())
+
+        embed()
+        exit()
+        # Create pool of workers
+        pool = multiprocessing.Pool(4)
+        # Map pool of workers to process
+        pool.starmap(func=self.interpolate_data, iterable=self.dummy)
+        # Wait until workers complete execution
+        pool.close()
+
+        # self.obj =  [[] for _ in range(10)]
+        time_data = self.data_time
+        result = Parallel(n_jobs=-2, require='sharedmem')(
+            delayed(unwrap_self)(ca_data) for ca_data in self.dummy)
+
+
+        ca_trace = self.data_z[self.data_rois[cell_id]]
+        f = interp1d(self.data_time, ca_trace, kind='linear', bounds_error=False, fill_value=0)
+        ca_trace = f(stimulus_ds['Time'])
+
+        # Compute Binary Trace
+        above_th = stimulus_ds['Volt'] >= intensity_threshold
+        binary = np.zeros_like(stimulus_ds['Volt'])
+        binary[above_th] = 1
+
+        # Convolve CIRF with Binary
+        reg = np.convolve(binary, cirf_data_ds, 'full')
+        reg_norm = reg/np.max(reg)
+
+        # Trim reg so that if fits the binary trace duration
+        reg_norm = reg_norm[:len(binary)]
+
+        # Now compute linear regression model between ca response and reg
+        # Do this parallel, for each roi
+        score, r_squared, slope = self.apply_linear_model(
+            xx=reg_norm, yy=ca_trace, norm_reg=False)
+
+        print('')
+        print(f'Score: {score}')
+        print(f'R²: {r_squared}')
+        print(f'Slope: {slope}')
+        print('')
+
+        # fig_reg, ax_reg = plt.subplots()
+        # t = self.stimulus_ds['Time']
+        # ax_reg.plot(t, binary, 'g')
+        # ax_reg.plot(t, reg_norm, 'r')
+        # ax_reg.plot(t, ca_trace, 'k')
+        # plt.show()
+
+        #
+        # plt.plot(self.stimulus['Time'], self.stimulus['Volt'], 'b', alpha=0.2)
+        # plt.plot(self.stimulus_onset_times, [1] * len(self.stimulus_onset_times), 'xr')
+        # plt.plot(self.stimulus_offset_times, [1] * len(self.stimulus_offset_times), 'dr')
+        # plt.show()
+        return score
+
     def _cirf_creater(self):
-        # Pop up a new window
-        # time_axis = np.linspace(0, 10, 1000)
-        self.dt = 0.0001
-        data, time_axis = self.cirf_double_tau(tau1=1, tau2=2, a=1, dt=self.dt)
+        # Compute CIRF
+        self.cirf_data, self.cirf_time_axis = self.cirf_double_tau(tau1=self.cirf_tau_1, tau2=self.cirf_tau_2, a=self.cirf_a, dt=self.dt)
         self.cirf_fig, self.cirf_ax = plt.subplots()
-        self.cirf_plot, = self.cirf_ax.plot(time_axis, data, 'k', lw=2)
+        self.cirf_plot, = self.cirf_ax.plot(self.cirf_time_axis, self.cirf_data, 'k', lw=2)
         self.cirf_ax.set_xlabel('Time [s]')
         self.cirf_ax.set_ylabel('Y-Value [a.u.]')
 
-        tau2_max = 10.0
-        self.cirf_ax.set_xlim((-1, 5 * tau2_max))
+        self.cirf_ax.set_xlim((-1, 5 * self.cirf_tau_2_max))
         self.cirf_ax.set_ylim((0, 1))
 
+        # Pop up a new window
         self.cirf_window = tk.Toplevel(self.master)
         self.cirf_window.title('Calcium Impulse Response Function')
         self.cirf_window.geometry("800x800")
@@ -260,15 +424,15 @@ class MainApplication(tk.Frame):
         self.tau1_current_value = tk.DoubleVar()
         self.tau1_current_value.set(1)
         tau1_slider = tk.Scale(self.cirf_window, from_=0.01, to=10.0, orient=tk.HORIZONTAL,
-                               resolution=0.01, variable=self.tau1_current_value, command=self.change_cirf)
+                               resolution=0.01, variable=self.tau1_current_value, command=self._change_cirf)
         tau1_slider.grid(row=2, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
 
         tau2_label = tk.Label(self.cirf_window, text='Tau 2 [s]', font=("Arial", slider_font_size))
         tau2_label.grid(row=3, column=0, padx=5, pady=5, sticky=(tk.N, tk.E))
         self.tau2_current_value = tk.DoubleVar()
         self.tau2_current_value.set(2)
-        tau2_slider = tk.Scale(self.cirf_window, from_=0.01, to=tau2_max, orient=tk.HORIZONTAL, resolution=0.01,
-                               variable=self.tau2_current_value, command=self.change_cirf)
+        tau2_slider = tk.Scale(self.cirf_window, from_=0.01, to=self.cirf_tau_2_max, orient=tk.HORIZONTAL, resolution=0.01,
+                               variable=self.tau2_current_value, command=self._change_cirf)
         tau2_slider.grid(row=3, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
 
         a_label = tk.Label(self.cirf_window, text='Amplitude', font=("Arial", slider_font_size))
@@ -276,7 +440,7 @@ class MainApplication(tk.Frame):
         self.a_current_value = tk.DoubleVar()
         self.a_current_value.set(1)
         a_slider = tk.Scale(self.cirf_window, from_=0.1, to=5, orient=tk.HORIZONTAL, resolution=0.1,
-                               variable=self.a_current_value, command=self.change_cirf)
+                               variable=self.a_current_value, command=self._change_cirf)
         a_slider.grid(row=4, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
 
         self.cirf_canvas = FigureCanvasTkAgg(self.cirf_fig, master=self.cirf_window)  # A tk.DrawingArea.
@@ -284,16 +448,21 @@ class MainApplication(tk.Frame):
         self.cirf_canvas.get_tk_widget().grid(row=1, column=0, columnspan=2)
         self.cirf_canvas.draw()
 
-    def change_cirf(self, event):
-        tau1 = self.tau1_current_value.get()
-        tau2 = self.tau2_current_value.get()
-        a = self.a_current_value.get()
-        c, t = self.cirf_double_tau(tau1, tau2, a, dt=self.dt)
-        self.cirf_plot.set_xdata(t)
-        self.cirf_plot.set_ydata(c)
+        #
+        self.continue_button = tk.Button(self.cirf_window, text='Continue', command=self._compute_stimulus_regression)
+        self.continue_button.grid(row=5, column=0)
+
+    def _change_cirf(self, event):
+        # Get new values and store them
+        self.cirf_tau_1 = self.tau1_current_value.get()
+        self.cirf_tau_2 = self.tau2_current_value.get()
+        self.cirf_a = self.a_current_value.get()
+        self.cirf_data, self.cirf_time_axis = self.cirf_double_tau(self.cirf_tau_1, self.cirf_tau_2, self.cirf_a, dt=self.dt)
+        self.cirf_plot.set_xdata(self.cirf_time_axis)
+        self.cirf_plot.set_ydata(self.cirf_data)
         # Adapt x and y limits of the figure
-        if np.max(c) > 1:
-            if np.max(c) <= 5:
+        if np.max(self.cirf_data) > 1:
+            if np.max(self.cirf_data) <= 5:
                 self.cirf_ax.set_ylim((0, 5))
             else:
                 self.cirf_ax.set_ylim((0, 10))
@@ -744,6 +913,80 @@ class MainApplication(tk.Frame):
     def pop_up_error(self, tlt, msg):
         tk.messagebox.showerror(title=tlt, message=msg)
         self.window_dummy.lift()
+
+    def _quick_start_with_data(self):
+        # Remove the text on the Canvas
+        self.import_data_text.set_visible(False)
+        base_dir = 'C:/UniFreiburg/Code/DataViewer/ExampleData/SimpleDataViewer/220525_04_01/'
+        rec_name = '220525_04_01'
+        stimulus_file = pd.read_csv(f'{base_dir}{rec_name}_stimulation.txt', delimiter=',', header=0)
+        self.stimulus = pd.DataFrame()
+        self.stimulus['Time'] = stimulus_file.iloc[:, 0]
+        self.stimulus['Volt'] = stimulus_file.iloc[:, 1]
+
+        self.data_raw = pd.read_csv(f'{base_dir}{rec_name}_raw.txt', delimiter=',', header=0)
+        # Get ROIs from columns
+        self.data_rois = self.data_raw.keys()
+        self.data_id = 0
+
+        # Convert to delta f over f
+        self.data_df = self.convert_raw_to_df_f(self.data_raw)
+
+        # Compute z-scores
+        self.data_z = self.compute_z_score(self.data_df)
+        # There is a time axis, so use the maximum time to estimate the recordings frame rate
+        self.data_fr = self.estimate_sampling_rate(
+            data=self.data_raw, f_stimulation=self.stimulus, print_msg=True)
+        # Compute Time Axis for Recording
+        data_dummy = self.data_raw[self.data_rois[self.data_id]]
+        self.data_time = np.linspace(0, len(data_dummy) / self.data_fr, len(data_dummy))
+        # Fill List with rois
+        # First clear listbox
+        self.listbox.delete(0, tk.END)
+        rois_numbers = np.linspace(1, len(self.data_rois.to_list()), len(self.data_rois.to_list()), dtype='int')
+        rois_numbers = np.char.mod('%d', rois_numbers)
+        self.listbox.insert("end", *rois_numbers)
+        self.listbox.bind('<<ListboxSelect>>', self.list_items_selected)
+
+        # Reference Image and ROIs Info
+        self.ref_img = plt.imread(f'{base_dir}{rec_name}_ref.tif')
+        self.rois_in_ref = read_roi_zip(f'{base_dir}{rec_name}_RoiSet.zip')
+        self._compute_ref_images()
+
+        # ==============================================================================================================
+        # Now Update The Figure and close the Import Window
+        # --------------------------------------------------------------------------------------------------------------
+        self.initialize_stimulus_plot()
+        self.initialize_recording_plot()
+        self.ref_img_obj = self.axs_ref.imshow(self.roi_images[self.data_id])
+        self.ref_img_text = []
+        for i, v in enumerate(self.roi_pos):
+            if i == self.data_id:
+                color = (1, 0, 0)
+            else:
+                color = (1, 1, 1)
+            self.ref_img_text.append(self.axs_ref.text(
+                v[0], v[1], f'{i + 1}', fontsize=10, color=color,
+                horizontalalignment='center', verticalalignment='center'
+            ))
+
+        self.axs_ref.axis('off')
+        self.ref_img_obj = self.axs_ref.imshow(self.ref_img)
+        self.axs_ref.set_visible(True)
+        self.canvas_ref.draw()
+
+        # Add Navigation Toolbars
+        self.toolbar_ref = CustomNavigationToolbar2Tk(self.canvas_ref, self.frame_toolbar_ref)
+        self.toolbar_ref.pack(side=tk.TOP)
+        self.toolbar = CustomNavigationToolbar2Tk(self.canvas, self.frame_toolbar)
+        self.toolbar.pack(side=tk.TOP)
+
+        # Exit Import Window
+        self.import_stimulus_variable = tk.IntVar(value=1)
+        self.import_data_variable = tk.IntVar(value=1)
+        self.import_reference_variable = tk.IntVar(value=1)
+        self.import_rois_variable = tk.IntVar(value=1)
+        self.new_data_loaded = True
 
     def _collect_import_data(self):
         # All inputs are strings!
