@@ -5,8 +5,11 @@ import tkinter.messagebox
 import os
 import csv
 import cv2
+import threading
 import pandas as pd
 import numpy as np
+import time as clock
+import concurrent.futures as cf
 from joblib import Parallel, delayed
 import multiprocessing
 from sklearn.linear_model import LinearRegression
@@ -79,6 +82,8 @@ class MainApplication(tk.Frame):
         self.cirf_tau_2_max = 10
         self.cirf_a = 1
         self.dt = 0.0001
+        self.lm_scoring_available = False
+        self.lm_scoring = []
 
         # Create a dataclass to store directories for browsing files
         self.browser = Browser
@@ -91,35 +96,67 @@ class MainApplication(tk.Frame):
         self.add_file_menu()
 
         # Add The Main Windows in the App
+        # TOP FRAME
+        self.top_frame = tk.Frame(self.master)
+        self.top_frame.grid(row=0, column=0, sticky='news')
+
         # Frame for ToolBar
-        self.frame_toolbar_ref = tk.Frame(self.master)
-        self.frame_toolbar_ref.grid(row=0, column=0, padx=5, pady=5, sticky='ew')
+        self.frame_toolbar_ref = tk.Frame(self.top_frame)
+        self.frame_toolbar_ref.grid(row=0, column=1, padx=5, pady=5, sticky='news')
+
         self.frame_toolbar = tk.Frame(self.master)
-        self.frame_toolbar.grid(row=2, column=0, padx=5, pady=5, sticky='ew')
+        self.frame_toolbar.grid(row=2, column=0, padx=5, pady=5, sticky='news')
+
+        # Frame for the LM Scoring results
+        # self.frame_lms_results = tk.Frame(self.top_frame)
+        # self.frame_lms_results.grid(row=1, column=0, padx=5, pady=5, sticky='news')
+
+        self.lms_results_label = tk.LabelFrame(self.top_frame, text='Linear Regression Scoring')
+        self.lms_results_label.grid(row=1, column=0, padx=10, pady=10, sticky='n')
+        label_score = tk.Label(self.lms_results_label, text='Score').grid(row=0, column=0, padx=5, pady=5)
+        label_r_squared = tk.Label(self.lms_results_label, text='R-Squared').grid(row=1, column=0, padx=5, pady=5)
+        label_slope = tk.Label(self.lms_results_label, text='Slope').grid(row=2, column=0, padx=5, pady=5)
+        self.score_value_label = tk.Label(self.lms_results_label, text='')
+        self.r_squared_value_label = tk.Label(self.lms_results_label, text='')
+        self.slope_value_label = tk.Label(self.lms_results_label, text='')
+
+        self.score_value_label.grid(row=0, column=1, padx=5, pady=5)
+        self.r_squared_value_label.grid(row=1, column=1, padx=5, pady=5)
+        self.slope_value_label.grid(row=2, column=1, padx=5, pady=5)
+
+        self.lms_results_label.grid(row=1, column=0, padx=5, pady=5)
+
+        # self.lms_results_label = tk.Label(self.frame_lms_results, text=self.lm_scoring)
+        # self.lms_results_label.grid(row=1, column=0, sticky='news')
+        # self.lms_results_label.config(state='disable')
 
         # Frame for the Reference Image
-        self.frame_ref_img = tk.Frame(self.master)
-        self.frame_ref_img.grid(row=1, column=0, padx=5, pady=5, sticky='ew')
+        self.frame_ref_img = tk.Frame(self.top_frame)
+        self.frame_ref_img.grid(row=1, column=1, columnspan=1, padx=5, pady=5, sticky='news')
 
         # Frame for ROIs List
-        self.frame_rois_list = tk.Frame(self.master)
-        self.frame_rois_list.grid(row=1, column=1, padx=5, pady=5, sticky='ew')
+        self.frame_rois_list = tk.Frame(self.top_frame)
+        self.frame_rois_list.grid(row=1, column=2, padx=5, pady=5, sticky='news')
         self.list_items = tk.Variable(value=[])
-
+        # Create a List Box in the ROIs List Frame
         self.listbox = tk.Listbox(self.frame_rois_list, listvariable=self.list_items, height=10, selectmode='SINGLE',
                                   takefocus=0)
         self.listbox.grid(row=0, column=0)
         # Add scrollbar
         self.scroll_bar = tk.Scrollbar(self.frame_rois_list)
         self.scroll_bar.grid(row=0, column=1, sticky=tk.N+tk.S+tk.W)
-
         self.listbox.config(yscrollcommand=self.scroll_bar.set)
         self.scroll_bar.config(command=self.listbox.yview)
 
         # Frame for the Data Figure
         self.frame_traces = tk.Frame(self.master)
-        self.frame_traces.grid(row=3, column=0, columnspan=2, padx=5, pady=5, sticky='ew')
-        # self.frame_traces.bind('<Enter>', lambda event: self.enter_frame_traces())
+        self.frame_traces.grid(row=3, column=0, columnspan=2, padx=5, pady=5, sticky='news')
+        # self.frame_traces.bind('<Enter>', lambda event: self.enter_frame_traces()
+
+        # Column weights.
+        self.top_frame.grid_columnconfigure(0, weight=20)
+        self.top_frame.grid_columnconfigure(1, weight=70)
+        self.top_frame.grid_columnconfigure(2, weight=10)
 
         # Key Bindings
         self.master.bind('<Left>', self._previous)
@@ -135,6 +172,7 @@ class MainApplication(tk.Frame):
         # Ref Image with ROIs
         self.fig_ref, self.axs_ref = plt.subplots()
         self.axs_ref.axis('off')
+        self.fig_ref.subplots_adjust(left=0, top=1, bottom=0, right=1, wspace=0, hspace=0)
 
         # Data Plot
         self.fig, self.axs = plt.subplots()
@@ -151,6 +189,7 @@ class MainApplication(tk.Frame):
         self.canvas_ref = FigureCanvasTkAgg(self.fig_ref, master=self.frame_ref_img)  # A tk.DrawingArea.
         self.canvas_ref.draw()
         self.canvas_ref.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        # self.canvas_ref.get_tk_widget().grid(row=0, column=0, sticky='news')
 
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.frame_traces)  # A tk.DrawingArea.
         self.canvas.draw()
@@ -212,14 +251,17 @@ class MainApplication(tk.Frame):
 
     def select_roi_with_mouse(self, event):
         if self.new_data_loaded:
+            pixel_th = 10
             click_x = event.xdata
             click_y = event.ydata
             error = []
             for k in self.roi_pos:
-                x_diff = (k[0] - click_x)**2
-                y_diff = (k[1] - click_y)**2
-                error.append(np.sqrt(x_diff + y_diff))
-            pixel_th = 10
+                if isinstance(click_x, float) and isinstance(click_y, float):
+                    x_diff = (k[0] - click_x)**2
+                    y_diff = (k[1] - click_y)**2
+                    error.append(np.sqrt(x_diff + y_diff))
+                else:
+                    error.append(pixel_th * 2)
             if np.min(error) > pixel_th:
                 # There is no ROI located close enough to the click
                 return "break"
@@ -251,10 +293,8 @@ class MainApplication(tk.Frame):
     def enter_frame_traces(self):
         print('ENTERED!')
 
-    
-    def interpolate_data(self, data):
-        data_time = self.data_time
-        new_time = self.stimulus_ds['Time']
+    @staticmethod
+    def interpolate_data(data_time, new_time, data):
         f = interp1d(data_time, data, kind='linear', bounds_error=False, fill_value=0)
         new_data = f(new_time)
         return new_data
@@ -310,90 +350,61 @@ class MainApplication(tk.Frame):
 
         return f_downward, f_upward
 
-    def _compute_stimulus_regression(self):
-        a = self._linear_regression_scoring()
-
     def _linear_regression_scoring(self):
-        # Settings
-        intensity_threshold = 4
+        def do_scoring():
+            # Check Entry
+            try:
+                intensity_threshold = int(self.lms_intensity_th_input.get())
+            except ValueError:
+                self.window_dummy = self.cirf_window
+                self.pop_up_error('ERROR', 'Stimulus Intensity must be Integer!')
+                return "break"
+            # Start the progress bar
+            self.lms_pb_label.grid(row=7, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
+            self.lms_pb.grid(row=7, column=1, columnspan=2, padx=0, pady=5, sticky=(tk.N, tk.W))
+            self.lms_pb.start()
+            # Find stimulus onsets and offsets
+            # stimulus_diff = np.diff(self.stimulus['Volt'], append=0)
+            # offsets, onsets = self.find_stimulus_time(
+            #     volt_threshold=intensity_threshold, f_stimulation=self.stimulus['Volt'], mode='above')
 
-        # Down-Sample stimulus
-        ds_factor = 10
-        stimulus_ds = pd.DataFrame()
-        stimulus_ds['Time'] = self.stimulus['Time'].to_numpy()[::ds_factor]
-        stimulus_ds['Volt'] = self.stimulus['Volt'].to_numpy()[::ds_factor]
-        cirf_data_ds = self.cirf_data[::ds_factor]
-        self.stimulus_ds = stimulus_ds
-        # Find stimulus onsets and offsets
-        # stimulus_diff = np.diff(self.stimulus['Volt'], append=0)
-        offsets, onsets = self.find_stimulus_time(
-            volt_threshold=intensity_threshold, f_stimulation=stimulus_ds['Volt'], mode='above')
+            # Convert stimulus samples into time
+            # stimulus_onset_times = stimulus_ds['Time'].iloc[onsets]
+            # stimulus_offset_times = stimulus_ds['Time'].iloc[offsets]
 
-        # Convert stimulus samples into time
-        stimulus_onset_times = stimulus_ds['Time'].iloc[onsets]
-        stimulus_offset_times = stimulus_ds['Time'].iloc[offsets]
+            # Interpolation Ca Recording Trace (Up-Sampling) for Linear Model
+            ca_traces = []
+            for _, idx in enumerate(self.data_z):
+                ca_traces.append(self.interpolate_data(self.data_time, self.stimulus['Time'], self.data_z[idx].to_numpy()))
 
-        # Interpolation Ca Recording Trace (Up-Sampling) for Linear Model
-        # Do this in parallel
-        self.dummy = []
-        for _, idx in enumerate(self.data_z):
-            self.dummy.append(self.data_z[idx].to_numpy())
+            # Compute Binary Trace
+            above_th = self.stimulus['Volt'] >= intensity_threshold
+            binary = np.zeros_like(self.stimulus['Volt'])
+            binary[above_th] = 1
 
-        embed()
-        exit()
-        # Create pool of workers
-        pool = multiprocessing.Pool(4)
-        # Map pool of workers to process
-        pool.starmap(func=self.interpolate_data, iterable=self.dummy)
-        # Wait until workers complete execution
-        pool.close()
+            # Convolve CIRF with Binary
+            reg = np.convolve(binary, self.cirf_data, 'full')
+            reg_norm = reg/np.max(reg)
 
-        # self.obj =  [[] for _ in range(10)]
-        time_data = self.data_time
-        result = Parallel(n_jobs=-2, require='sharedmem')(
-            delayed(unwrap_self)(ca_data) for ca_data in self.dummy)
-
-
-        ca_trace = self.data_z[self.data_rois[cell_id]]
-        f = interp1d(self.data_time, ca_trace, kind='linear', bounds_error=False, fill_value=0)
-        ca_trace = f(stimulus_ds['Time'])
-
-        # Compute Binary Trace
-        above_th = stimulus_ds['Volt'] >= intensity_threshold
-        binary = np.zeros_like(stimulus_ds['Volt'])
-        binary[above_th] = 1
-
-        # Convolve CIRF with Binary
-        reg = np.convolve(binary, cirf_data_ds, 'full')
-        reg_norm = reg/np.max(reg)
-
-        # Trim reg so that if fits the binary trace duration
-        reg_norm = reg_norm[:len(binary)]
-
-        # Now compute linear regression model between ca response and reg
-        # Do this parallel, for each roi
-        score, r_squared, slope = self.apply_linear_model(
-            xx=reg_norm, yy=ca_trace, norm_reg=False)
-
-        print('')
-        print(f'Score: {score}')
-        print(f'R²: {r_squared}')
-        print(f'Slope: {slope}')
-        print('')
-
-        # fig_reg, ax_reg = plt.subplots()
-        # t = self.stimulus_ds['Time']
-        # ax_reg.plot(t, binary, 'g')
-        # ax_reg.plot(t, reg_norm, 'r')
-        # ax_reg.plot(t, ca_trace, 'k')
-        # plt.show()
-
-        #
-        # plt.plot(self.stimulus['Time'], self.stimulus['Volt'], 'b', alpha=0.2)
-        # plt.plot(self.stimulus_onset_times, [1] * len(self.stimulus_onset_times), 'xr')
-        # plt.plot(self.stimulus_offset_times, [1] * len(self.stimulus_offset_times), 'dr')
-        # plt.show()
-        return score
+            # Trim reg so that if fits the binary trace duration
+            reg_norm = reg_norm[:len(binary)]
+            # Now compute linear regression model between ca response and reg
+            lm_scoring = pd.DataFrame(columns=self.data_z.keys(), index=['Score', 'Rsquared', 'Slope'])
+            for k, roi_name in enumerate(lm_scoring):
+                score, r_squared, slope = self.apply_linear_model(
+                    xx=reg_norm, yy=ca_traces[k], norm_reg=False)
+                lm_scoring[roi_name] = [score, r_squared, slope]
+            self.lm_scoring = lm_scoring
+            # Stop the progress bar
+            self.lms_pb.stop()
+            self.lms_pb.grid_forget()
+            self.lms_pb_label.grid_forget()
+            self.lm_scoring_available = True
+            self.lms_start_btn.config(text='RE-START')
+            print('LMS FINISHED')
+        # start new thread
+        threading.Thread(target=do_scoring).start()
+        # self.lms_results_label.config(state='normal')
 
     def _cirf_creater(self):
         # Compute CIRF
@@ -448,9 +459,17 @@ class MainApplication(tk.Frame):
         self.cirf_canvas.get_tk_widget().grid(row=1, column=0, columnspan=2)
         self.cirf_canvas.draw()
 
-        #
-        self.continue_button = tk.Button(self.cirf_window, text='Continue', command=self._compute_stimulus_regression)
-        self.continue_button.grid(row=5, column=0)
+        # Stimulus Linear Regression Scoring (LMS)
+        self.lms_label = tk.Label(self.cirf_window, text='Stimulus Linear Regression Scoring')
+        self.lms_label.grid(row=5, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
+        self.lms_label_th = tk.Label(self.cirf_window, text='Stimulus Intensity Threshold: ')
+        self.lms_label_th.grid(row=6, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
+        self.lms_intensity_th_input = tk.Entry(self.cirf_window)
+        self.lms_intensity_th_input.grid(row=6, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
+        self.lms_start_btn = tk.Button(self.cirf_window, text='START', command=self._linear_regression_scoring)
+        self.lms_start_btn.grid(row=6, column=2, padx=5, pady=5, sticky=(tk.N, tk.W))
+        self.lms_pb_label = tk.Label(self.cirf_window, text='Please Wait...')
+        self.lms_pb = ttk.Progressbar(self.cirf_window, orient='horizontal', mode='indeterminate', length=200)
 
     def _change_cirf(self, event):
         # Get new values and store them
@@ -566,6 +585,13 @@ class MainApplication(tk.Frame):
                 self.ref_img_text[self.data_id].set_color((1, 0, 0))
                 self.canvas_ref.draw()
             self.canvas.draw()
+
+            if self.lm_scoring_available:
+                # self.lms_results_label.config(state='normal')
+                text = self.lm_scoring[self.data_rois[self.data_id]]
+                self.score_value_label.config(text=f'{text[0]:.2f}')
+                self.r_squared_value_label.config(text=f'{text[1]:.2f}')
+                self.slope_value_label.config(text=f'{text[2]:.2f}')
 
     def list_items_selected(self, event):
         self.data_id_prev = self.data_id
@@ -730,15 +756,20 @@ class MainApplication(tk.Frame):
         self.data_file_name_label = tk.Label(self.import_data_window, text="No File selected")
         self.data_file_name_label.grid(row=2, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
 
-        # Delimiter Settings
+        # Delimiter Combobox
         delimiter_options = ['Comma', 'Tab', 'Semicolon', 'Space', 'Colon']
         self.data_delimiter_label = tk.Label(self.import_data_window, text="Delimiter: ")
         self.data_delimiter_label.grid(row=3, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
-        self.delimiter_data_variable = tk.StringVar(self.import_data_window)
-        self.delimiter_data_variable.set(delimiter_options[0])  # default value
-        self.delimiter_data_dropdown = tk.OptionMenu(self.import_data_window, self.delimiter_data_variable, *delimiter_options)
-        self.delimiter_data_dropdown.grid(row=3, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
-        self.delimiter_data_dropdown.config(width=10, font=('Arial', 8))
+        self.delimiter_data_variable = ttk.Combobox(self.import_data_window, values=delimiter_options)
+        self.delimiter_data_variable['state'] = 'readonly'
+        self.delimiter_data_variable.current(0)
+        self.delimiter_data_variable.grid(row=3, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
+
+        # self.delimiter_data_variable = tk.StringVar(self.import_data_window)
+        # self.delimiter_data_variable.set(delimiter_options[0])  # default value
+        # self.delimiter_data_dropdown = tk.OptionMenu(self.import_data_window, self.delimiter_data_variable, *delimiter_options)
+        # self.delimiter_data_dropdown.grid(row=3, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
+        # self.delimiter_data_dropdown.config(width=10, font=('Arial', 8))
 
         # Add Header Options
         self.data_has_header = tk.IntVar(value=0)
@@ -787,13 +818,18 @@ class MainApplication(tk.Frame):
         self.stimulus_file_name_label.grid(row=1, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
 
         # Delimiter Settings
+        self.delimiter_stimulus_variable = ttk.Combobox(self.import_stimulus_window, values=delimiter_options)
+        self.delimiter_stimulus_variable['state'] = 'readonly'
+        self.delimiter_stimulus_variable.current(0)
+        self.delimiter_stimulus_variable.grid(row=2, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
+        
         self.stimulus_delimiter_label = tk.Label(self.import_stimulus_window, text="Delimiter: ")
         self.stimulus_delimiter_label.grid(row=2, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
-        self.delimiter_stimulus_variable = tk.StringVar(self.import_stimulus_window)
-        self.delimiter_stimulus_variable.set(delimiter_options[0])  # default value
-        self.delimiter_dropdown = tk.OptionMenu(self.import_stimulus_window, self.delimiter_stimulus_variable, *delimiter_options)
-        self.delimiter_dropdown.grid(row=2, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
-        self.delimiter_dropdown.config(width=10, font=('Arial', 8))
+        # self.delimiter_stimulus_variable = tk.StringVar(self.import_stimulus_window)
+        # self.delimiter_stimulus_variable.set(delimiter_options[0])  # default value
+        # self.delimiter_dropdown = tk.OptionMenu(self.import_stimulus_window, self.delimiter_stimulus_variable, *delimiter_options)
+        # self.delimiter_dropdown.grid(row=2, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
+        # self.delimiter_dropdown.config(width=10, font=('Arial', 8))
 
         # Add Header Options
         self.stimulus_has_header = tk.IntVar(value=0)
@@ -958,7 +994,7 @@ class MainApplication(tk.Frame):
         # --------------------------------------------------------------------------------------------------------------
         self.initialize_stimulus_plot()
         self.initialize_recording_plot()
-        self.ref_img_obj = self.axs_ref.imshow(self.roi_images[self.data_id])
+        self.ref_img_obj = self.axs_ref.imshow(self.roi_images[self.data_id], aspect='equal')
         self.ref_img_text = []
         for i, v in enumerate(self.roi_pos):
             if i == self.data_id:
@@ -971,7 +1007,7 @@ class MainApplication(tk.Frame):
             ))
 
         self.axs_ref.axis('off')
-        self.ref_img_obj = self.axs_ref.imshow(self.ref_img)
+        # self.ref_img_obj = self.axs_ref.imshow(self.ref_img)
         self.axs_ref.set_visible(True)
         self.canvas_ref.draw()
 
