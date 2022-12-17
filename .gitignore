@@ -5,7 +5,8 @@
 # ignore ALL files in ANY directory
 old
 old/
-temp 
+temp
+.temp 
 .idea
 __pycache__
 ExampleData

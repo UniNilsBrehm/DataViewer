@@ -8,6 +8,7 @@ import cv2
 import threading
 import pandas as pd
 import numpy as np
+from zipfile import ZipFile
 import time as clock
 import concurrent.futures as cf
 from joblib import Parallel, delayed
@@ -84,6 +85,9 @@ class MainApplication(tk.Frame):
         self.dt = 0.0001
         self.lm_scoring_available = False
         self.lm_scoring = []
+        self.reg_norm = []
+        self.reg_scaled = []
+        self.show_reg_bool = True
 
         # Create a dataclass to store directories for browsing files
         self.browser = Browser
@@ -181,6 +185,7 @@ class MainApplication(tk.Frame):
         # Those will contain the actual data that is plotted later on
         self.stimulus_plot, = self.axs.plot(0, 0)
         self.data_plot, = self.axs.plot(0, 0)
+        self.reg_plot, = self.axs.plot(0, 0)
         self.import_data_text = self.axs.text(0.5, 0.5, 'Click here to import Data', ha='center', va='center', transform=self.axs.transAxes)
         self.axs.axis('off')
 
@@ -231,6 +236,64 @@ class MainApplication(tk.Frame):
 
         self.configure_gui()
 
+    def export_files(self):
+        file_dir = filedialog.asksaveasfile(mode='w', defaultextension=".nb")
+        if file_dir is None:  # asksaveasfile return `None` if dialog closed with "cancel".
+            return "break"
+        # create a ZipFile object
+        with ZipFile(file_dir.name, 'w') as zip_object:
+            metadata = pd.DataFrame()
+            # Add files to the zip
+            # self.available_data_files keys: 'rec', 'stimulus', 'ref', 'rois'
+            # add recording
+            if self.available_data_files['rec']:
+                # get file extension
+                ext = os.path.splitext(self.browser.data_file)[1]
+                f_name = f'01_recording{ext}'
+                # zip_object.write(self.browser.data_file, os.path.basename(self.browser.data_file))
+                zip_object.write(self.browser.data_file, f_name)
+                metadata['rec'] = [f_name]
+            # add stimulus
+            if self.available_data_files['stimulus']:
+                ext = os.path.splitext(self.browser.data_file)[1]
+                f_name = f'02_stimulus{ext}'
+                zip_object.write(self.browser.stimulus_file, f_name)
+                metadata['stimulus'] = [f_name]
+
+            # add ref image
+            if self.available_data_files['ref']:
+                ext = os.path.splitext(self.browser.data_file)[1]
+                f_name = f'03_ref_image{ext}'
+                zip_object.write(self.browser.reference_image_file, f_name)
+                metadata['ref'] = [f_name]
+
+            # add roi file
+            if self.available_data_files['rois']:
+                ext = os.path.splitext(self.browser.data_file)[1]
+                f_name = f'04_rois{ext}'
+                zip_object.write(self.browser.roi_file, f_name)
+                metadata['rois'] = [f_name]
+
+            # Add metadata
+            metadata.to_csv('temp/metadata.txt', index=False)
+            zip_object.write('temp/metadata.txt', 'metadata.txt')
+            print('Exported Files to Zip')
+
+    def import_zip_file(self):
+        # file_extension must be: [('Recording Files', '.txt')]
+        file_dir = filedialog.askopenfilename(filetypes=[('Zip File', '.nb')])
+        with ZipFile(file_dir, 'r') as zip_file:
+            # Get File Names
+            file_names = []
+            for f_name in zip_file.filelist:
+                file_names.append(f_name.filename)
+            file_names = sorted(file_names)
+            # Should be now: Rois, raw, ref, stimulation
+            s = pd.read_csv(zip_file.open(''))
+
+            embed()
+            exit()
+
     def add_file_menu(self):
         # Add Menu
         menu_bar = tk.Menu(self.master)
@@ -238,6 +301,8 @@ class MainApplication(tk.Frame):
         file_menu.add_command(label="DEMO", command=self._quick_start_with_data)
         file_menu.add_command(label="Import Files", command=self._import_data)
         file_menu.add_command(label="Calcium Impulse Response Function", command=self._cirf_creater)
+        file_menu.add_command(label="Export Files", command=self.export_files)
+        file_menu.add_command(label="Import Zip File", command=self.import_zip_file)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self._exit_app)
         menu_bar.add_cascade(label="File", menu=file_menu)
@@ -350,6 +415,35 @@ class MainApplication(tk.Frame):
 
         return f_downward, f_upward
 
+    def _update_reg_trace(self):
+        self._compute_reg_trace()
+        self.show_reg_bool = True
+        self._show_reg()
+
+    def _compute_reg_trace(self):
+        # Check Entry
+        def do_reg_trace():
+            try:
+                intensity_threshold = int(self.lms_intensity_th_input.get())
+            except ValueError:
+                self.window_dummy = self.cirf_window
+                self.pop_up_error('ERROR', 'Stimulus Intensity must be Integer!')
+                return "break"
+            # Compute Binary Trace
+            above_th = self.stimulus['Volt'] >= intensity_threshold
+            self.binary = np.zeros_like(self.stimulus['Volt'])
+            self.binary[above_th] = 1
+
+            # Convolve CIRF with Binary
+            reg = np.convolve(self.binary, self.cirf_data, 'full')
+
+            # Trim reg so that if fits the binary trace duration
+            reg = reg[:len(self.binary)]
+            self.reg_norm = reg / np.max(reg)
+            self.reg_scaled = self.reg_norm * np.max(self.data_z.max())
+
+        threading.Thread(target=do_reg_trace).start()
+
     def _linear_regression_scoring(self):
         def do_scoring():
             # Check Entry
@@ -360,41 +454,40 @@ class MainApplication(tk.Frame):
                 self.pop_up_error('ERROR', 'Stimulus Intensity must be Integer!')
                 return "break"
             # Start the progress bar
-            self.lms_pb_label.grid(row=7, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
-            self.lms_pb.grid(row=7, column=1, columnspan=2, padx=0, pady=5, sticky=(tk.N, tk.W))
+            self.lms_pb_label.grid(row=8, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
+            self.lms_pb.grid(row=8, column=1, columnspan=2, padx=0, pady=5, sticky=(tk.N, tk.W))
             self.lms_pb.start()
-            # Find stimulus onsets and offsets
-            # stimulus_diff = np.diff(self.stimulus['Volt'], append=0)
-            # offsets, onsets = self.find_stimulus_time(
-            #     volt_threshold=intensity_threshold, f_stimulation=self.stimulus['Volt'], mode='above')
 
-            # Convert stimulus samples into time
-            # stimulus_onset_times = stimulus_ds['Time'].iloc[onsets]
-            # stimulus_offset_times = stimulus_ds['Time'].iloc[offsets]
-
+            # Get Binary and Reg
+            self._compute_reg_trace()
+            reg_norm = self.reg_norm
             # Interpolation Ca Recording Trace (Up-Sampling) for Linear Model
             ca_traces = []
             for _, idx in enumerate(self.data_z):
                 ca_traces.append(self.interpolate_data(self.data_time, self.stimulus['Time'], self.data_z[idx].to_numpy()))
 
-            # Compute Binary Trace
-            above_th = self.stimulus['Volt'] >= intensity_threshold
-            binary = np.zeros_like(self.stimulus['Volt'])
-            binary[above_th] = 1
 
-            # Convolve CIRF with Binary
-            reg = np.convolve(binary, self.cirf_data, 'full')
-            reg_norm = reg/np.max(reg)
+            # # Compute Binary Trace
+            # above_th = self.stimulus['Volt'] >= intensity_threshold
+            # binary = np.zeros_like(self.stimulus['Volt'])
+            # binary[above_th] = 1
+            #
+            # # Convolve CIRF with Binary
+            # reg = np.convolve(binary, self.cirf_data, 'full')
+            #
+            # # Trim reg so that if fits the binary trace duration
+            # reg = reg[:len(binary)]
+            # reg_norm = reg/np.max(reg)
 
-            # Trim reg so that if fits the binary trace duration
-            reg_norm = reg_norm[:len(binary)]
             # Now compute linear regression model between ca response and reg
             lm_scoring = pd.DataFrame(columns=self.data_z.keys(), index=['Score', 'Rsquared', 'Slope'])
             for k, roi_name in enumerate(lm_scoring):
                 score, r_squared, slope = self.apply_linear_model(
                     xx=reg_norm, yy=ca_traces[k], norm_reg=False)
                 lm_scoring[roi_name] = [score, r_squared, slope]
+            # Store to class variables
             self.lm_scoring = lm_scoring
+            # self.reg_norm = reg_norm * np.max(self.data_z.max())
             # Stop the progress bar
             self.lms_pb.stop()
             self.lms_pb.grid_forget()
@@ -462,12 +555,18 @@ class MainApplication(tk.Frame):
         # Stimulus Linear Regression Scoring (LMS)
         self.lms_label = tk.Label(self.cirf_window, text='Stimulus Linear Regression Scoring')
         self.lms_label.grid(row=5, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
+
+        # Update Reg Display
+        self.compute_reg_button = tk.Button(self.cirf_window, text='Update Reg', command=self._update_reg_trace)
+        self.compute_reg_button.grid(row=6, column=2, padx=5, pady=5, sticky=(tk.N, tk.W))
+
         self.lms_label_th = tk.Label(self.cirf_window, text='Stimulus Intensity Threshold: ')
         self.lms_label_th.grid(row=6, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
         self.lms_intensity_th_input = tk.Entry(self.cirf_window)
         self.lms_intensity_th_input.grid(row=6, column=1, padx=5, pady=5, sticky=(tk.N, tk.W))
+
         self.lms_start_btn = tk.Button(self.cirf_window, text='START', command=self._linear_regression_scoring)
-        self.lms_start_btn.grid(row=6, column=2, padx=5, pady=5, sticky=(tk.N, tk.W))
+        self.lms_start_btn.grid(row=7, column=0, padx=5, pady=5, sticky=(tk.N, tk.W))
         self.lms_pb_label = tk.Label(self.cirf_window, text='Please Wait...')
         self.lms_pb = ttk.Progressbar(self.cirf_window, orient='horizontal', mode='indeterminate', length=200)
 
@@ -576,7 +675,6 @@ class MainApplication(tk.Frame):
         if self.new_data_loaded:
             # Update Recording Plot Data
             self.data_plot.set_ydata(self.data_df[self.data_rois[self.data_id]])
-
             # Update Ref Image
             if self.import_rois_variable.get() == 1:
                 self.ref_img_obj.set_data(self.roi_images[self.data_id])
@@ -587,11 +685,26 @@ class MainApplication(tk.Frame):
             self.canvas.draw()
 
             if self.lm_scoring_available:
-                # self.lms_results_label.config(state='normal')
+                self.show_reg_button.config(state='normal')
                 text = self.lm_scoring[self.data_rois[self.data_id]]
                 self.score_value_label.config(text=f'{text[0]:.2f}')
                 self.r_squared_value_label.config(text=f'{text[1]:.2f}')
                 self.slope_value_label.config(text=f'{text[2]:.2f}')
+
+    def _show_reg(self):
+        # Update Reg Plot
+        if self.show_reg_bool:
+            self.reg_plot.set_xdata(self.stimulus['Time'])
+            self.reg_plot.set_ydata(self.reg_scaled)
+            self.reg_plot.set_visible(True)
+            self.show_reg_bool = False
+            self.show_reg_button.config(text='Hide Reg')
+            self.canvas.draw()
+        else:
+            self.reg_plot.set_visible(False)
+            self.show_reg_bool = True
+            self.show_reg_button.config(text='Show Reg')
+            self.canvas.draw()
 
     def list_items_selected(self, event):
         self.data_id_prev = self.data_id
@@ -1016,6 +1129,15 @@ class MainApplication(tk.Frame):
         self.toolbar_ref.pack(side=tk.TOP)
         self.toolbar = CustomNavigationToolbar2Tk(self.canvas, self.frame_toolbar)
         self.toolbar.pack(side=tk.TOP)
+        self.toolbar_ref.children['!button4'].pack_forget()
+        self.toolbar.children['!button4'].pack_forget()
+
+        # Add show reg/ hide reg button
+        separator = tk.Frame(master=self.toolbar, height='18p', relief=tk.RIDGE, bg='DarkGray')
+        separator.pack(side=tk.LEFT, padx='3p')
+        self.show_reg_button = tk.Button(master=self.toolbar, text="Show Reg", command=self._show_reg)
+        self.show_reg_button.pack(side="left")
+        self.show_reg_button.config(state='disable')
 
         # Exit Import Window
         self.import_stimulus_variable = tk.IntVar(value=1)
@@ -1037,6 +1159,9 @@ class MainApplication(tk.Frame):
             self.import_rois_variable.set(value=0)
             rois_selected = self.import_rois_variable.get()
         self.window_dummy = self.import_window
+
+        self.available_data_files = {'rec': data_selected, 'stimulus': stimulus_selected, 'ref': reference_selected,
+                                     'rois': rois_selected}
 
         # ==============================================================================================================
         # First Check Stimulus File
@@ -1223,6 +1348,13 @@ class MainApplication(tk.Frame):
         self.toolbar_ref.pack(side=tk.TOP)
         self.toolbar = CustomNavigationToolbar2Tk(self.canvas, self.frame_toolbar)
         self.toolbar.pack(side=tk.TOP)
+
+        # Add show reg/ hide reg button
+        separator = tk.Frame(master=self.toolbar, height='18p', relief=tk.RIDGE, bg='DarkGray')
+        separator.pack(side=tk.LEFT, padx='3p')
+        self.show_reg_button = tk.Button(master=self.toolbar, text="Show Reg", command=self._show_reg)
+        self.show_reg_button.pack(side="left")
+        self.show_reg_button.config(state='disable')
 
         # Exit Import Window
         self.new_data_loaded = True
