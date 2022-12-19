@@ -9,6 +9,8 @@ import threading
 import pandas as pd
 import numpy as np
 from zipfile import ZipFile
+import shutil
+from matplotlib.artist import Artist
 import time as clock
 import concurrent.futures as cf
 from joblib import Parallel, delayed
@@ -240,69 +242,113 @@ class MainApplication(tk.Frame):
         file_dir = filedialog.asksaveasfile(mode='w', defaultextension=".nb")
         if file_dir is None:  # asksaveasfile return `None` if dialog closed with "cancel".
             return "break"
+
+        # rec_file_names = ['01_recording_raw.csv', '02_recording_df.csv', '03_recording_z.csv']
+        files_temp = []
+        metadata = pd.DataFrame()
         # create a ZipFile object
         with ZipFile(file_dir.name, 'w') as zip_object:
-            metadata = pd.DataFrame()
             # Add files to the zip
-            # self.available_data_files keys: 'rec', 'stimulus', 'ref', 'rois'
             # add recording
             if self.available_data_files['rec']:
-                # get file extension
-                ext = os.path.splitext(self.browser.data_file)[1]
-                f_name = f'01_recording{ext}'
-                # zip_object.write(self.browser.data_file, os.path.basename(self.browser.data_file))
-                zip_object.write(self.browser.data_file, f_name)
-                metadata['rec'] = [f_name]
+                metadata['rec_fr'] = [self.data_fr]
+
+                f_name = '01_recording_raw.csv'
+                self.data_raw.to_csv(f'temp/{f_name}', decimal='.', sep=',', index=False)
+                files_temp.append(f_name)
+                zip_object.write(f'temp/{f_name}', f_name)
+
+                f_name = '02_recording_df.csv'
+                self.data_df.to_csv(f'temp/{f_name}', decimal='.', sep=',', index=False)
+                files_temp.append(f_name)
+                zip_object.write(f'temp/{f_name}', f_name)
+
+                f_name = '03_recording_z.csv'
+                self.data_z.to_csv(f'temp/{f_name}', decimal='.', sep=',', index=False)
+                files_temp.append(f_name)
+                zip_object.write(f'temp/{f_name}', f_name)
+
             # add stimulus
             if self.available_data_files['stimulus']:
-                ext = os.path.splitext(self.browser.data_file)[1]
-                f_name = f'02_stimulus{ext}'
-                zip_object.write(self.browser.stimulus_file, f_name)
-                metadata['stimulus'] = [f_name]
+                f_name = '04_stimulus.csv'
+                self.stimulus.to_csv(f'temp/{f_name}', decimal='.', sep=',', index=False)
+                zip_object.write(f'temp/{f_name}', f_name)
+                files_temp.append(f_name)
 
             # add ref image
             if self.available_data_files['ref']:
-                ext = os.path.splitext(self.browser.data_file)[1]
-                f_name = f'03_ref_image{ext}'
-                zip_object.write(self.browser.reference_image_file, f_name)
-                metadata['ref'] = [f_name]
+                f_name = '05_ref_image.tif'
+                cv2.imwrite(f'temp/{f_name}', self.ref_img)
+                # cv2.imwrite(f'temp/{self.browser.reference_image_file}', self.ref_img)
+                zip_object.write(f'temp/{f_name}', f_name)
+                files_temp.append(f_name)
 
             # add roi file
             if self.available_data_files['rois']:
-                ext = os.path.splitext(self.browser.data_file)[1]
-                f_name = f'04_rois{ext}'
+                f_name = f'06_rois.zip'
+                shutil.copy2(self.browser.roi_file, f'temp/{f_name}')
                 zip_object.write(self.browser.roi_file, f_name)
-                metadata['rois'] = [f_name]
+                files_temp.append(f_name)
 
-            # Add metadata
-            metadata.to_csv('temp/metadata.txt', index=False)
-            zip_object.write('temp/metadata.txt', 'metadata.txt')
-            print('Exported Files to Zip')
+            # Store metadata
+            metadata.to_csv('temp/metadata.csv')
+            files_temp.append('metadata.csv')
+            zip_object.write('temp/metadata.csv', 'metadata.csv')
+        # Delete all files in temp
+        for f in files_temp:
+            os.remove(os.path.join('temp/', f))
+        print('Exported Files to Zip')
 
-    def import_zip_file(self):
+    def _import_zip_file(self):
+        default_names = ['01_recording_raw.csv', '02_recording_df.csv', '03_recording_z.csv']
         # file_extension must be: [('Recording Files', '.txt')]
         file_dir = filedialog.askopenfilename(filetypes=[('Zip File', '.nb')])
-        with ZipFile(file_dir, 'r') as zip_file:
-            # Get File Names
-            file_names = []
-            for f_name in zip_file.filelist:
-                file_names.append(f_name.filename)
-            file_names = sorted(file_names)
-            # Should be now: Rois, raw, ref, stimulation
-            s = pd.read_csv(zip_file.open(''))
+        self.available_data_files = {'rec': False, 'stimulus': False, 'ref': False, 'rois': False}
 
-            embed()
-            exit()
+        with ZipFile(file_dir, 'r') as zip_file:
+            file_names = []
+            for f in zip_file.filelist:
+                file_names.append(f.filename)
+            self.metadata = pd.read_csv(zip_file.open('metadata.csv'))
+            if '01_recording_raw.csv' in file_names:
+                self.data_raw = pd.read_csv(zip_file.open('01_recording_raw.csv'))
+                self.data_rois = self.data_raw.keys()
+                self.data_id = 0
+                self.data_fr = self.metadata['rec_fr'].item()
+                # Compute Time Axis for Recording
+                data_dummy = self.data_raw[self.data_rois[self.data_id]]
+                self.data_time = np.linspace(0, len(data_dummy) / self.data_fr, len(data_dummy))
+                self.available_data_files['rec'] = True
+            if '02_recording_df.csv' in file_names:
+                self.data_df = pd.read_csv(zip_file.open('02_recording_df.csv'))
+            if '03_recording_z.csv' in file_names:
+                self.data_z = pd.read_csv(zip_file.open('03_recording_z.csv'))
+            if '04_stimulus.csv' in file_names:
+                self.stimulus = pd.read_csv(zip_file.open('04_stimulus.csv'))
+                self.available_data_files['stimulus'] = True
+            if '05_ref_image.tif' in file_names:
+                self.ref_img = plt.imread(zip_file.open('05_ref_image.tif'))
+                self.available_data_files['ref'] = True
+            if '06_rois.zip' in file_names:
+                self.rois_in_ref = read_roi_zip(zip_file.open('06_rois.zip'))
+                self.available_data_files['rois'] = True
+        if self.new_data_loaded:
+            self._initialize_new_data()
+        else:
+            self._initialize_first_data()
+        self.new_data_loaded = True
 
     def add_file_menu(self):
         # Add Menu
         menu_bar = tk.Menu(self.master)
         file_menu = tk.Menu(menu_bar, tearoff=0)
-        file_menu.add_command(label="DEMO", command=self._quick_start_with_data)
-        file_menu.add_command(label="Import Files", command=self._import_data)
+        # file_menu.add_command(label="DEMO", command=self._quick_start_with_data)
+        file_menu.add_command(label="Open File...", command=self._import_zip_file)
+        file_menu.add_command(label="Import...", command=self._import_data)
+        file_menu.add_separator()
+        file_menu.add_command(label="Save to File", command=self.export_files)
+        file_menu.add_separator()
         file_menu.add_command(label="Calcium Impulse Response Function", command=self._cirf_creater)
-        file_menu.add_command(label="Export Files", command=self.export_files)
-        file_menu.add_command(label="Import Zip File", command=self.import_zip_file)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self._exit_app)
         menu_bar.add_cascade(label="File", menu=file_menu)
@@ -354,66 +400,6 @@ class MainApplication(tk.Frame):
         # Set Window to Full Screen
         self.master.state('zoomed')
         self.master.grid_columnconfigure(0, weight=1)
-
-    def enter_frame_traces(self):
-        print('ENTERED!')
-
-    @staticmethod
-    def interpolate_data(data_time, new_time, data):
-        f = interp1d(data_time, data, kind='linear', bounds_error=False, fill_value=0)
-        new_data = f(new_time)
-        return new_data
-
-    @staticmethod
-    def apply_linear_model(xx, yy, norm_reg=True):
-        # Normalize data to [0, 1]
-        if norm_reg:
-            f_y = yy / np.max(yy)
-        else:
-            f_y = yy
-
-        # Check dimensions of reg
-        if xx.shape[0] == 0:
-            print('ERROR: Wrong x input')
-            return 0, 0, 0
-        if yy.shape[0] == 0:
-            print('ERROR: Wrong y input')
-            return 0, 0, 0
-
-        if len(xx.shape) == 1:
-            reg_xx = xx.reshape(-1, 1)
-        elif len(xx.shape) == 2:
-            reg_xx = xx
-        else:
-            print('ERROR: Wrong x input')
-            return 0, 0, 0
-
-        # Linear Regression
-        l_model = LinearRegression().fit(reg_xx, f_y)
-        # Slope (y = a * x + c)
-        a = l_model.coef_[0]
-        # R**2 of model
-        f_r_squared = l_model.score(reg_xx, f_y)
-        # Score
-        f_score = a * f_r_squared
-        return f_score, f_r_squared, a
-
-    @staticmethod
-    def find_stimulus_time(volt_threshold, f_stimulation, mode):
-        # Find stimulus time points
-        if mode == 'below':
-            threshold_crossings = np.diff(f_stimulation < volt_threshold, prepend=False)
-        else:
-            # mode = 'above'
-            threshold_crossings = np.diff(f_stimulation > volt_threshold, prepend=False)
-
-        # Get Upward Crossings
-        f_upward = np.argwhere(threshold_crossings)[::2, 0]  # Upward crossings
-
-        # Get Downward Crossings
-        f_downward = np.argwhere(threshold_crossings)[1::2, 0]  # Downward crossings
-
-        return f_downward, f_upward
 
     def _update_reg_trace(self):
         self._compute_reg_trace()
@@ -609,13 +595,22 @@ class MainApplication(tk.Frame):
 
     def initialize_stimulus_plot(self):
         self.axs.set_visible(True)
-        self.stimulus_plot, = self.axs.plot(self.stimulus['Time'], self.stimulus['Volt'], 'b')
+        self.stimulus_plot.set_xdata(self.stimulus['Time'])
+        self.stimulus_plot.set_ydata(self.stimulus['Volt'])
+        if not self.available_data_files['rec']:
+            self.axs.set_xlim(0, self.stimulus['Time'].iloc[-1])
+            self.axs.set_ylim(-1, np.max(self.stimulus['Volt'].max()))
+        # self.stimulus_plot, = self.axs.plot(self.stimulus['Time'], self.stimulus['Volt'], 'b')
         self.canvas.draw()
         print('Stimulus drawn to Canvas')
 
     def initialize_recording_plot(self):
         self.axs.set_visible(True)
-        self.data_plot, = self.axs.plot(self.data_time, self.data_df[self.data_rois[self.data_id]], 'k')
+        self.data_plot.set_xdata(self.data_time)
+        self.data_plot.set_ydata(self.data_df[self.data_rois[self.data_id]])
+        self.axs.set_xlim(0, self.data_time[-1])
+        self.axs.set_ylim(-1, np.max(self.data_df.max()))
+        # self.data_plot, = self.axs.plot(self.data_time, self.data_df[self.data_rois[self.data_id]], 'k')
         self.canvas.draw()
         print('Recording drawn to Canvas')
 
@@ -676,7 +671,8 @@ class MainApplication(tk.Frame):
             # Update Recording Plot Data
             self.data_plot.set_ydata(self.data_df[self.data_rois[self.data_id]])
             # Update Ref Image
-            if self.import_rois_variable.get() == 1:
+            # if self.import_rois_variable.get() == 1:
+            if self.available_data_files['rois']:
                 self.ref_img_obj.set_data(self.roi_images[self.data_id])
                 # Update Ref Image Label
                 self.ref_img_text[self.data_id_prev].set_color((1, 1, 1))
@@ -825,6 +821,10 @@ class MainApplication(tk.Frame):
         self.import_window = tk.Toplevel(self.master)
         self.import_window.title('Import...')
         self.import_window.geometry("700x850")
+
+        # Only the import window is accessible now
+        self.import_window.grab_set()
+
         # import_data_window.attributes('-topmost', True)
 
         # GLOBAL LAYOUT SETTINGS
@@ -1063,74 +1063,106 @@ class MainApplication(tk.Frame):
         tk.messagebox.showerror(title=tlt, message=msg)
         self.window_dummy.lift()
 
-    def _quick_start_with_data(self):
-        # Remove the text on the Canvas
-        self.import_data_text.set_visible(False)
-        base_dir = 'C:/UniFreiburg/Code/DataViewer/ExampleData/SimpleDataViewer/220525_04_01/'
-        rec_name = '220525_04_01'
-        stimulus_file = pd.read_csv(f'{base_dir}{rec_name}_stimulation.txt', delimiter=',', header=0)
-        self.stimulus = pd.DataFrame()
-        self.stimulus['Time'] = stimulus_file.iloc[:, 0]
-        self.stimulus['Volt'] = stimulus_file.iloc[:, 1]
+    def load_stimulus_file(self):
+        stimulus_file = pd.read_csv(self.browser.stimulus_file, delimiter=self.stimulus_delimiter,
+                                    header=self.stimulus_header)
+        self.stimulus['Volt'] = stimulus_file.iloc[:, self.stimulus_data_column_number]
 
-        self.data_raw = pd.read_csv(f'{base_dir}{rec_name}_raw.txt', delimiter=',', header=0)
-        # Get ROIs from columns
-        self.data_rois = self.data_raw.keys()
-        self.data_id = 0
+    def _initialize_new_data(self):
+        # Remove text of old rois
+        for kk in self.ref_img_text:
+            Artist.remove(kk)
 
-        # Convert to delta f over f
-        self.data_df = self.convert_raw_to_df_f(self.data_raw)
-
-        # Compute z-scores
-        self.data_z = self.compute_z_score(self.data_df)
-        # There is a time axis, so use the maximum time to estimate the recordings frame rate
-        self.data_fr = self.estimate_sampling_rate(
-            data=self.data_raw, f_stimulation=self.stimulus, print_msg=True)
-        # Compute Time Axis for Recording
-        data_dummy = self.data_raw[self.data_rois[self.data_id]]
-        self.data_time = np.linspace(0, len(data_dummy) / self.data_fr, len(data_dummy))
         # Fill List with rois
         # First clear listbox
-        self.listbox.delete(0, tk.END)
-        rois_numbers = np.linspace(1, len(self.data_rois.to_list()), len(self.data_rois.to_list()), dtype='int')
-        rois_numbers = np.char.mod('%d', rois_numbers)
-        self.listbox.insert("end", *rois_numbers)
-        self.listbox.bind('<<ListboxSelect>>', self.list_items_selected)
+        if self.available_data_files['rec']:
+            self.listbox.delete(0, tk.END)
+            rois_numbers = np.linspace(1, len(self.data_rois.to_list()), len(self.data_rois.to_list()), dtype='int')
+            rois_numbers = np.char.mod('%d', rois_numbers)
+            self.listbox.insert("end", *rois_numbers)
+            self.listbox.bind('<<ListboxSelect>>', self.list_items_selected)
+        if self.available_data_files['rois']:
+            self._compute_ref_images()
 
-        # Reference Image and ROIs Info
-        self.ref_img = plt.imread(f'{base_dir}{rec_name}_ref.tif')
-        self.rois_in_ref = read_roi_zip(f'{base_dir}{rec_name}_RoiSet.zip')
-        self._compute_ref_images()
+        if self.available_data_files['stimulus']:
+            self.initialize_stimulus_plot()
 
-        # ==============================================================================================================
-        # Now Update The Figure and close the Import Window
-        # --------------------------------------------------------------------------------------------------------------
-        self.initialize_stimulus_plot()
-        self.initialize_recording_plot()
-        self.ref_img_obj = self.axs_ref.imshow(self.roi_images[self.data_id], aspect='equal')
-        self.ref_img_text = []
-        for i, v in enumerate(self.roi_pos):
-            if i == self.data_id:
-                color = (1, 0, 0)
-            else:
-                color = (1, 1, 1)
-            self.ref_img_text.append(self.axs_ref.text(
-                v[0], v[1], f'{i + 1}', fontsize=10, color=color,
-                horizontalalignment='center', verticalalignment='center'
-            ))
+        if self.available_data_files['rec']:
+            self.initialize_recording_plot()
 
-        self.axs_ref.axis('off')
-        # self.ref_img_obj = self.axs_ref.imshow(self.ref_img)
-        self.axs_ref.set_visible(True)
-        self.canvas_ref.draw()
+        if self.available_data_files['rois']:
+            # self.ref_img_obj = self.axs_ref.imshow(self.roi_images[self.data_id])
+            self.ref_img_obj.set_data(self.roi_images[self.data_id])
+            self.ref_img_text = []
+            for i, v in enumerate(self.roi_pos):
+                if i == self.data_id:
+                    color = (1, 0, 0)
+                else:
+                    color = (1, 1, 1)
+                self.ref_img_text.append(self.axs_ref.text(
+                    v[0], v[1], f'{i + 1}', fontsize=10, color=color,
+                    horizontalalignment='center', verticalalignment='center'
+                ))
 
-        # Add Navigation Toolbars
+            self.axs_ref.axis('off')
+            self.axs_ref.set_visible(True)
+            self.canvas_ref.draw()
+        else:
+            if self.available_data_files['ref']:
+                # self.ref_img_obj = self.axs_ref.imshow(self.ref_img)
+                self.ref_img_obj.set_data(self.ref_img)
+                self.axs_ref.axis('off')
+                self.axs_ref.set_visible(True)
+                self.canvas_ref.draw()
+
+        self.show_reg_button.config(state='disable')
+
+    def _initialize_first_data(self):
+        # Remove the text on the Canvas
+        self.import_data_text.set_visible(False)
+        # Fill List with rois
+        # First clear listbox
+        if self.available_data_files['rec']:
+            self.listbox.delete(0, tk.END)
+            rois_numbers = np.linspace(1, len(self.data_rois.to_list()), len(self.data_rois.to_list()), dtype='int')
+            rois_numbers = np.char.mod('%d', rois_numbers)
+            self.listbox.insert("end", *rois_numbers)
+            self.listbox.bind('<<ListboxSelect>>', self.list_items_selected)
+        if self.available_data_files['rois']:
+            self._compute_ref_images()
+
+        if self.available_data_files['stimulus']:
+            self.initialize_stimulus_plot()
+        if self.available_data_files['rec']:
+            self.initialize_recording_plot()
+        if self.available_data_files['rois']:
+            self.ref_img_obj = self.axs_ref.imshow(self.roi_images[self.data_id])
+            self.ref_img_text = []
+            for i, v in enumerate(self.roi_pos):
+                if i == self.data_id:
+                    color = (1, 0, 0)
+                else:
+                    color = (1, 1, 1)
+                self.ref_img_text.append(self.axs_ref.text(
+                    v[0], v[1], f'{i + 1}', fontsize=10, color=color,
+                    horizontalalignment='center', verticalalignment='center'
+                ))
+
+            self.axs_ref.axis('off')
+            self.axs_ref.set_visible(True)
+            self.canvas_ref.draw()
+        else:
+            if self.available_data_files['ref']:
+                self.ref_img_obj = self.axs_ref.imshow(self.ref_img)
+                self.axs_ref.axis('off')
+                self.axs_ref.set_visible(True)
+                self.canvas_ref.draw()
+
+            # Add Navigation Toolbars
         self.toolbar_ref = CustomNavigationToolbar2Tk(self.canvas_ref, self.frame_toolbar_ref)
         self.toolbar_ref.pack(side=tk.TOP)
         self.toolbar = CustomNavigationToolbar2Tk(self.canvas, self.frame_toolbar)
         self.toolbar.pack(side=tk.TOP)
-        self.toolbar_ref.children['!button4'].pack_forget()
-        self.toolbar.children['!button4'].pack_forget()
 
         # Add show reg/ hide reg button
         separator = tk.Frame(master=self.toolbar, height='18p', relief=tk.RIDGE, bg='DarkGray')
@@ -1138,13 +1170,6 @@ class MainApplication(tk.Frame):
         self.show_reg_button = tk.Button(master=self.toolbar, text="Show Reg", command=self._show_reg)
         self.show_reg_button.pack(side="left")
         self.show_reg_button.config(state='disable')
-
-        # Exit Import Window
-        self.import_stimulus_variable = tk.IntVar(value=1)
-        self.import_data_variable = tk.IntVar(value=1)
-        self.import_reference_variable = tk.IntVar(value=1)
-        self.import_rois_variable = tk.IntVar(value=1)
-        self.new_data_loaded = True
 
     def _collect_import_data(self):
         # All inputs are strings!
@@ -1174,22 +1199,22 @@ class MainApplication(tk.Frame):
                 return "break"
             # Now try to import the stimulus file
             # Check settings
-            stimulus_delimiter = self.convert_to_delimiter(self.delimiter_stimulus_variable.get())
-            data_column_number = self.cols.get()
+            self.stimulus_delimiter = self.convert_to_delimiter(self.delimiter_stimulus_variable.get())
+            self.stimulus_data_column_number = self.cols.get()
             time_column_number = self.cols_time.get()
             header_button_state = self.stimulus_has_header.get()
             if header_button_state == 0:
-                stimulus_header = 0
+                self.stimulus_header = 0
             else:
-                stimulus_header = None
+                self.stimulus_header = None
             # Check if text entries are correct
             try:
-                data_column_number = int(data_column_number) - 1
+                data_column_number = int(self.stimulus_data_column_number) - 1
             except ValueError:
                 self.pop_up_error('ERROR', 'Stimulus Data Column Number must be Integer')
                 return "break"
             # Now finally import the stimulus file
-            stimulus_file = pd.read_csv(self.browser.stimulus_file, delimiter=stimulus_delimiter, header=stimulus_header)
+            stimulus_file = pd.read_csv(self.browser.stimulus_file, delimiter=self.stimulus_delimiter, header=self.stimulus_header)
             self.stimulus['Volt'] = stimulus_file.iloc[:, data_column_number]
 
             # Check for Time Axis Data
@@ -1266,23 +1291,23 @@ class MainApplication(tk.Frame):
             data_dummy = self.data_raw[self.data_rois[self.data_id]]
             self.data_time = np.linspace(0, len(data_dummy) / self.data_fr, len(data_dummy))
 
-            # Fill List with rois
-            # First clear listbox
-            self.listbox.delete(0, tk.END)
-            rois_numbers = np.linspace(1, len(self.data_rois.to_list()), len(self.data_rois.to_list()), dtype='int')
-            rois_numbers = np.char.mod('%d', rois_numbers)
-            self.listbox.insert("end", *rois_numbers)
-            self.listbox.bind('<<ListboxSelect>>', self.list_items_selected)
+            # # Fill List with rois
+            # # First clear listbox
+            # self.listbox.delete(0, tk.END)
+            # rois_numbers = np.linspace(1, len(self.data_rois.to_list()), len(self.data_rois.to_list()), dtype='int')
+            # rois_numbers = np.char.mod('%d', rois_numbers)
+            # self.listbox.insert("end", *rois_numbers)
+            # self.listbox.bind('<<ListboxSelect>>', self.list_items_selected)
 
         # ==============================================================================================================
         # Third check reference image and imagej rois files
         # --------------------------------------------------------------------------------------------------------------
         # Reference Image and ROIs Info
-        if reference_selected == 1:
+        if reference_selected:
             self.ref_img = plt.imread(self.browser.reference_image_file)
-            if rois_selected == 1:
+            if rois_selected:
                 self.rois_in_ref = read_roi_zip(self.browser.roi_file)
-                self._compute_ref_images()
+                # self._compute_ref_images()
 
         # ==============================================================================================================
         # Now check the imported files for consistency
@@ -1316,48 +1341,53 @@ class MainApplication(tk.Frame):
         # ==============================================================================================================
         # Now Update The Figure and close the Import Window
         # --------------------------------------------------------------------------------------------------------------
-        if stimulus_selected:
-            self.initialize_stimulus_plot()
-        if data_selected:
-            self.initialize_recording_plot()
-        if rois_selected:
-            self.ref_img_obj = self.axs_ref.imshow(self.roi_images[self.data_id])
-            self.ref_img_text = []
-            for i, v in enumerate(self.roi_pos):
-                if i == self.data_id:
-                    color = (1, 0, 0)
-                else:
-                    color = (1, 1, 1)
-                self.ref_img_text.append(self.axs_ref.text(
-                    v[0], v[1], f'{i + 1}', fontsize=10, color=color,
-                    horizontalalignment='center', verticalalignment='center'
-                ))
-
-            self.axs_ref.axis('off')
-            self.axs_ref.set_visible(True)
-            self.canvas_ref.draw()
+        # if stimulus_selected:
+        #     self.initialize_stimulus_plot()
+        # if data_selected:
+        #     self.initialize_recording_plot()
+        # if rois_selected:
+        #     self.ref_img_obj = self.axs_ref.imshow(self.roi_images[self.data_id])
+        #     self.ref_img_text = []
+        #     for i, v in enumerate(self.roi_pos):
+        #         if i == self.data_id:
+        #             color = (1, 0, 0)
+        #         else:
+        #             color = (1, 1, 1)
+        #         self.ref_img_text.append(self.axs_ref.text(
+        #             v[0], v[1], f'{i + 1}', fontsize=10, color=color,
+        #             horizontalalignment='center', verticalalignment='center'
+        #         ))
+        #
+        #     self.axs_ref.axis('off')
+        #     self.axs_ref.set_visible(True)
+        #     self.canvas_ref.draw()
+        # else:
+        #     if reference_selected:
+        #         self.ref_img_obj = self.axs_ref.imshow(self.ref_img)
+        #         self.axs_ref.axis('off')
+        #         self.axs_ref.set_visible(True)
+        #         self.canvas_ref.draw()
+        #
+        # # Add Navigation Toolbars
+        # self.toolbar_ref = CustomNavigationToolbar2Tk(self.canvas_ref, self.frame_toolbar_ref)
+        # self.toolbar_ref.pack(side=tk.TOP)
+        # self.toolbar = CustomNavigationToolbar2Tk(self.canvas, self.frame_toolbar)
+        # self.toolbar.pack(side=tk.TOP)
+        #
+        # # Add show reg/ hide reg button
+        # separator = tk.Frame(master=self.toolbar, height='18p', relief=tk.RIDGE, bg='DarkGray')
+        # separator.pack(side=tk.LEFT, padx='3p')
+        # self.show_reg_button = tk.Button(master=self.toolbar, text="Show Reg", command=self._show_reg)
+        # self.show_reg_button.pack(side="left")
+        # self.show_reg_button.config(state='disable')
+        #
+        # # Exit Import Window
+        if self.new_data_loaded:
+            self._initialize_new_data()
         else:
-            if reference_selected:
-                self.ref_img_obj = self.axs_ref.imshow(self.ref_img)
-                self.axs_ref.axis('off')
-                self.axs_ref.set_visible(True)
-                self.canvas_ref.draw()
-
-        # Add Navigation Toolbars
-        self.toolbar_ref = CustomNavigationToolbar2Tk(self.canvas_ref, self.frame_toolbar_ref)
-        self.toolbar_ref.pack(side=tk.TOP)
-        self.toolbar = CustomNavigationToolbar2Tk(self.canvas, self.frame_toolbar)
-        self.toolbar.pack(side=tk.TOP)
-
-        # Add show reg/ hide reg button
-        separator = tk.Frame(master=self.toolbar, height='18p', relief=tk.RIDGE, bg='DarkGray')
-        separator.pack(side=tk.LEFT, padx='3p')
-        self.show_reg_button = tk.Button(master=self.toolbar, text="Show Reg", command=self._show_reg)
-        self.show_reg_button.pack(side="left")
-        self.show_reg_button.config(state='disable')
-
-        # Exit Import Window
+            self._initialize_first_data()
         self.new_data_loaded = True
+        self.import_window.grab_release()
         self.import_window.destroy()
 
     def _quit(self, event):
@@ -1491,6 +1521,63 @@ class MainApplication(tk.Frame):
         return image_out
 
     # STATIC METHODS +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    @staticmethod
+    def interpolate_data(data_time, new_time, data):
+        f = interp1d(data_time, data, kind='linear', bounds_error=False, fill_value=0)
+        new_data = f(new_time)
+        return new_data
+
+    @staticmethod
+    def apply_linear_model(xx, yy, norm_reg=True):
+        # Normalize data to [0, 1]
+        if norm_reg:
+            f_y = yy / np.max(yy)
+        else:
+            f_y = yy
+
+        # Check dimensions of reg
+        if xx.shape[0] == 0:
+            print('ERROR: Wrong x input')
+            return 0, 0, 0
+        if yy.shape[0] == 0:
+            print('ERROR: Wrong y input')
+            return 0, 0, 0
+
+        if len(xx.shape) == 1:
+            reg_xx = xx.reshape(-1, 1)
+        elif len(xx.shape) == 2:
+            reg_xx = xx
+        else:
+            print('ERROR: Wrong x input')
+            return 0, 0, 0
+
+        # Linear Regression
+        l_model = LinearRegression().fit(reg_xx, f_y)
+        # Slope (y = a * x + c)
+        a = l_model.coef_[0]
+        # R**2 of model
+        f_r_squared = l_model.score(reg_xx, f_y)
+        # Score
+        f_score = a * f_r_squared
+        return f_score, f_r_squared, a
+
+    @staticmethod
+    def find_stimulus_time(volt_threshold, f_stimulation, mode):
+        # Find stimulus time points
+        if mode == 'below':
+            threshold_crossings = np.diff(f_stimulation < volt_threshold, prepend=False)
+        else:
+            # mode = 'above'
+            threshold_crossings = np.diff(f_stimulation > volt_threshold, prepend=False)
+
+        # Get Upward Crossings
+        f_upward = np.argwhere(threshold_crossings)[::2, 0]  # Upward crossings
+
+        # Get Downward Crossings
+        f_downward = np.argwhere(threshold_crossings)[1::2, 0]  # Downward crossings
+
+        return f_downward, f_upward
+
     @staticmethod
     def do_nothing(event):
         return "break"
